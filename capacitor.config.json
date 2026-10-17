@@ -1,0 +1,12 @@
+{
+  "appId": "com.sakuradev.postapocalyptic3d",
+  "appName": "Post-Apocalyptic 3D",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  },
+  "android": {
+    "backgroundColor": "#0c0e12",
+    "allowMixedContent": true
+  }
+}

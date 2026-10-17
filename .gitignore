@@ -4,6 +4,16 @@ node_modules/
 # Production build outputs
 dist/
 
+# Android & Gradle
+.gradle/
+build/
+android/app/build/
+android/build/
+android/.gradle/
+local.properties
+*.apk
+*.aab
+
 # System and logs
 .DS_Store
 *.log

@@ -1,4 +1,4 @@
-name: CI - Test & Build
+name: CI & Android APK Build
 
 on:
   push:
@@ -9,12 +9,11 @@ on:
 
 jobs:
   test-and-build:
-    name: Node ${{ matrix.node-version }} (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    name: Node Test & Web Build (${{ matrix.node-version }})
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
         node-version: [20.x, 22.x]
 
     steps:
@@ -33,13 +32,57 @@ jobs:
       - name: Run Test Suite (16 Unit & Integration Tests)
         run: npm test
 
-      - name: Build Production Bundle (Vite)
+      - name: Build Production Web Bundle
         run: npm run build
 
-      - name: Archive Production Artifacts
+      - name: Archive Production Web Artifacts
         if: matrix.node-version == '22.x' && github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@v4
         with:
-          name: post-apocalyptic-3d-dist
+          name: post-apocalyptic-3d-web-dist
           path: dist/
           retention-days: 14
+
+  build-android-apk:
+    name: Build Android APK
+    needs: test-and-build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: 'npm'
+
+      - name: Setup Java 21 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'gradle'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Build Web Bundle & Sync Capacitor
+        run: npm run cap:build
+
+      - name: Grant Executable Permission for Gradlew
+        run: chmod +x android/gradlew
+
+      - name: Build Android Debug APK
+        working-directory: android
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Upload Android APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: post-apocalyptic-3d-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30

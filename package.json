@@ -8,12 +8,17 @@
     "dev": "node ./node_modules/vite/bin/vite.js --host 0.0.0.0 --port 5173",
     "build": "node ./node_modules/vite/bin/vite.js build",
     "preview": "node ./node_modules/vite/bin/vite.js preview --host 0.0.0.0 --port 5173",
-    "test": "node --test tests/*.test.js"
+    "test": "node --test tests/*.test.js",
+    "cap:sync": "node ./node_modules/@capacitor/cli/bin/capacitor sync android",
+    "cap:build": "npm run build && node ./node_modules/@capacitor/cli/bin/capacitor sync android"
   },
   "dependencies": {
+    "@capacitor/android": "^8.5.3",
+    "@capacitor/core": "^8.5.3",
     "three": "^0.186.1"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.5.3",
     "vite": "^8.3.4"
   }
 }
