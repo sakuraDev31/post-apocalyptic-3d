@@ -17,10 +17,19 @@ export class MobileHUD {
     this.onWireframeToggle = options.onWireframeToggle || (() => {});
     this.onAtmosphereChange = options.onAtmosphereChange || (() => {});
     this.onExportGLB = options.onExportGLB || (() => {});
+    this.onShadowsToggle = options.onShadowsToggle || (() => {});
+    this.onBumpToggle = options.onBumpToggle || (() => {});
+    this.onPixelRatioToggle = options.onPixelRatioToggle || (() => {});
+    this.onBuildingArchetypeChange = options.onBuildingArchetypeChange || (() => {});
+    this.onBackToMenu = options.onBackToMenu || (() => {});
 
     this.currentMode = 6;
+    this.currentBuildingArchetype = 1;
     this.isWireframe = false;
     this.currentAtmosphere = 'noon';
+    this.shadowsEnabled = true;
+    this.bumpEnabled = true;
+    this.pixelRatio = 1.5;
 
     this.assets = [
       { id: 1, type: 'building', label: '[1. Ruined Building]' },
@@ -48,7 +57,7 @@ export class MobileHUD {
     this.root.id = 'hud-root';
     this.root.className = 'hud-container';
 
-    // 1. Top Telemetry Overlay
+    // 1. Top Telemetry Overlay with Perf Toggles
     this.telemetryEl = document.createElement('div');
     this.telemetryEl.className = 'hud-telemetry';
     this.telemetryEl.innerHTML = `
@@ -58,6 +67,9 @@ export class MobileHUD {
       <div class="hud-telemetry-item"><span class="label">DRAWS:</span> <span id="tel-draws" class="value">0</span></div>
       <div class="hud-telemetry-item"><span class="label">TRIS:</span> <span id="tel-tris" class="value glow">0</span></div>
       <div class="hud-telemetry-item badge"><span id="tel-gen-badge">Ready</span></div>
+      <button type="button" id="tel-shadow-btn" class="hud-tel-btn active" title="Toggle Shadows">SHADOW: ON</button>
+      <button type="button" id="tel-bump-btn" class="hud-tel-btn active" title="Toggle Bump Maps">BUMP: ON</button>
+      <button type="button" id="tel-dpr-btn" class="hud-tel-btn" title="Toggle Pixel Ratio">DPR: 1.5</button>
     `;
     this.root.appendChild(this.telemetryEl);
 
@@ -144,6 +156,42 @@ export class MobileHUD {
     });
     this.actionBar.appendChild(this.btnExport);
 
+    // Building Archetype Selector (shown for building mode)
+    this.buildingSelect = document.createElement('select');
+    this.buildingSelect.id = 'hud-building-select';
+    this.buildingSelect.className = 'hud-select hud-action-btn building-select';
+    const archetypes = [
+      { id: 1, name: 'Archetype 1: Brutalist Block' },
+      { id: 2, name: 'Archetype 2: Apartment' },
+      { id: 3, name: 'Archetype 3: Warehouse' },
+      { id: 4, name: 'Archetype 4: Office Tower' },
+      { id: 5, name: 'Archetype 5: Bunker' },
+      { id: 6, name: 'Archetype 6: Gas Station' }
+    ];
+    for (const a of archetypes) {
+      const opt = document.createElement('option');
+      opt.value = a.id;
+      opt.textContent = a.name;
+      this.buildingSelect.appendChild(opt);
+    }
+    this.buildingSelect.style.display = this.currentMode === 1 ? 'inline-block' : 'none';
+    this.buildingSelect.addEventListener('change', (e) => {
+      e.stopPropagation();
+      this.currentBuildingArchetype = parseInt(e.target.value, 10);
+      this.onBuildingArchetypeChange(this.currentBuildingArchetype);
+    });
+    this.actionBar.appendChild(this.buildingSelect);
+
+    // Return to Menu Button
+    this.btnMenu = document.createElement('button');
+    this.btnMenu.className = 'hud-btn hud-action-btn menu-btn';
+    this.btnMenu.innerHTML = `<span>[MENU]</span>`;
+    this.btnMenu.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+      this.onBackToMenu();
+    });
+    this.actionBar.appendChild(this.btnMenu);
+
     this.root.appendChild(this.actionBar);
     this.container.appendChild(this.root);
 
@@ -155,6 +203,45 @@ export class MobileHUD {
     this.elTris = document.getElementById('tel-tris');
     this.elGenBadge = document.getElementById('tel-gen-badge');
     this.elRegenLabel = document.getElementById('regen-label');
+
+    // Wire Perf Toggles
+    const shadowBtn = document.getElementById('tel-shadow-btn');
+    if (shadowBtn) {
+      shadowBtn.addEventListener('pointerdown', (e) => {
+        e.stopPropagation();
+        this.shadowsEnabled = !this.shadowsEnabled;
+        shadowBtn.textContent = `SHADOW: ${this.shadowsEnabled ? 'ON' : 'OFF'}`;
+        shadowBtn.classList.toggle('active', this.shadowsEnabled);
+        this.onShadowsToggle(this.shadowsEnabled);
+      });
+    }
+
+    const bumpBtn = document.getElementById('tel-bump-btn');
+    if (bumpBtn) {
+      bumpBtn.addEventListener('pointerdown', (e) => {
+        e.stopPropagation();
+        this.bumpEnabled = !this.bumpEnabled;
+        bumpBtn.textContent = `BUMP: ${this.bumpEnabled ? 'ON' : 'OFF'}`;
+        bumpBtn.classList.toggle('active', this.bumpEnabled);
+        this.onBumpToggle(this.bumpEnabled);
+      });
+    }
+
+    const dprBtn = document.getElementById('tel-dpr-btn');
+    if (dprBtn) {
+      dprBtn.addEventListener('pointerdown', (e) => {
+        e.stopPropagation();
+        this.pixelRatio = this.pixelRatio === 1.5 ? 1.0 : 1.5;
+        dprBtn.textContent = `DPR: ${this.pixelRatio.toFixed(1)}`;
+        this.onPixelRatioToggle(this.pixelRatio);
+      });
+    }
+  }
+
+  setVisible(visible) {
+    if (this.root) {
+      this.root.style.display = visible ? 'block' : 'none';
+    }
   }
 
   injectStyles() {
@@ -408,6 +495,9 @@ export class MobileHUD {
 
   selectAsset(modeId) {
     this.currentMode = modeId;
+    if (this.buildingSelect) {
+      this.buildingSelect.style.display = modeId === 1 ? 'inline-block' : 'none';
+    }
     for (const btn of this.assetButtons) {
       if (parseInt(btn.getAttribute('data-id'), 10) === modeId) {
         btn.classList.add('active');

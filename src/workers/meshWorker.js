@@ -82,6 +82,9 @@ self.onmessage = function(e) {
       success: true,
       data: {
         geometries: serializedGeometries,
+        colliders: result.colliders || [],
+        footprintRadius: result.footprintRadius || 8.0,
+        doorways: result.doorways || [],
         metadata: {
           ...result.metadata,
           workerExecutionTimeMs: Math.round(t1 - t0)

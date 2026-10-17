@@ -113,6 +113,9 @@ export class MeshWorkerPool {
       const assetResult = {
         geometries: reconstructedGeoms,
         metadata: data.metadata,
+        colliders: data.colliders || [],
+        footprintRadius: data.footprintRadius || 8.0,
+        doorways: data.doorways || [],
         updateAnimation: () => {}
       };
 

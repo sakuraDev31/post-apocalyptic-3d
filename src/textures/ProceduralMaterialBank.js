@@ -169,6 +169,7 @@ export class ProceduralMaterialBank {
       metalness: 0.2,
       roughness: 0.9
     });
+    mat.userData = { bumpMap: bumpTex, bumpScale: 0.08, roughnessMap: roughnessTex };
     this.materials.set(MATERIAL_KEYS.RUST, mat);
   }
 
@@ -239,6 +240,7 @@ export class ProceduralMaterialBank {
       metalness: 0.05,
       roughness: 0.92
     });
+    mat.userData = { bumpMap: bumpTex, bumpScale: 0.05, roughnessMap: roughnessTex };
     this.materials.set(MATERIAL_KEYS.CONCRETE, mat);
   }
 
@@ -311,6 +313,7 @@ export class ProceduralMaterialBank {
       metalness: 0.1,
       roughness: 0.85
     });
+    mat.userData = { bumpMap: bumpTex, bumpScale: 0.06, roughnessMap: roughnessTex };
     this.materials.set(MATERIAL_KEYS.ASPHALT, mat);
   }
 
@@ -375,6 +378,7 @@ export class ProceduralMaterialBank {
       metalness: 0.05,
       roughness: 0.98
     });
+    mat.userData = { bumpMap: bumpTex, bumpScale: 0.04, roughnessMap: roughnessTex };
     this.materials.set(MATERIAL_KEYS.SOOT, mat);
   }
 
@@ -424,6 +428,7 @@ export class ProceduralMaterialBank {
       metalness: 0.8,
       roughness: 0.55
     });
+    mat.userData = { bumpMap: bumpTex, bumpScale: 0.05 };
     this.materials.set(MATERIAL_KEYS.REBAR, mat);
   }
 
@@ -513,6 +518,7 @@ export class ProceduralMaterialBank {
       roughness: 0.95,
       metalness: 0.05
     });
+    mat.userData = { bumpMap: bumpTex, bumpScale: 0.08 };
     this.materials.set(MATERIAL_KEYS.BARK, mat);
   }
 
@@ -561,7 +567,34 @@ export class ProceduralMaterialBank {
       roughness: 0.6,
       metalness: 0.65
     });
+    mat.userData = { bumpMap: bumpTex, bumpScale: 0.04 };
     this.materials.set(MATERIAL_KEYS.METAL_SCRAP, mat);
+  }
+
+  /**
+   * Enables or disables bump maps across all materials to preserve fill-rate
+   */
+  setBumpMapsEnabled(enabled) {
+    this.bumpMapsEnabled = Boolean(enabled);
+    for (const mat of this.materials.values()) {
+      if (mat.userData && mat.userData.bumpMap) {
+        mat.bumpMap = this.bumpMapsEnabled ? mat.userData.bumpMap : null;
+        mat.bumpScale = this.bumpMapsEnabled ? (mat.userData.bumpScale || 0.05) : 0;
+        mat.needsUpdate = true;
+      }
+    }
+  }
+
+  /**
+   * Adjusts material bank complexity according to quality tier
+   * @param {'low'|'medium'|'high'} tier
+   */
+  setQuality(tier) {
+    if (tier === 'low') {
+      this.setBumpMapsEnabled(false);
+    } else {
+      this.setBumpMapsEnabled(true);
+    }
   }
 
   /**

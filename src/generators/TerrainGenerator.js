@@ -1,11 +1,12 @@
 /**
  * TerrainGenerator.js
  * 
- * "Wasteland Terrain Chunk"
- * - Subdivided mesh (64x64 LOD 0, 48x48 LOD 1, 32x32 LOD 2)
- * - Multi-octave fBm elevation + ridged eroded gullies
- * - Flattened cracked-asphalt road spline down the center
- * - Slope & height vertex coloring
+ * Walkable Post-Apocalyptic Wasteland Terrain:
+ * - Pure shared function heightAt(x, z, seed) used by worker AND main thread
+ * - Gentle rolling hills (max slope ~25-35 deg), flat lots along road
+ * - Continuous deterministic world road spline
+ * - Reduced high-contrast blotchiness with smooth low-frequency tinting
+ * - Skirts around chunk borders to seamlessly hide LOD cracks
  * - Complies with AssetContract
  */
 
@@ -13,97 +14,113 @@ import * as THREE from 'three';
 import { SimplexNoise, createPRNG, evaluateSpline } from '../core/SeededNoise.js';
 import { MATERIAL_KEYS, computeBoundsAndTriangles, validateAssetResult } from '../core/AssetContract.js';
 
+/**
+ * Continuous road center X position at world coordinate z
+ */
+export function roadCenterX(z, seed = 1337) {
+  // Road starts exactly at x=0 at z=0, with gentle sweeping curves
+  return Math.sin(z * 0.015) * 8.0 + Math.sin(z * 0.04) * 3.0;
+}
+
+/**
+ * Pure shared elevation function used by both main thread physics and workers
+ */
+export function heightAt(x, z, seed = 1337) {
+  const noise = new SimplexNoise(seed);
+
+  // 1. Base gentle rolling hills (fBm)
+  const baseElev = noise.fbm2D(x * 0.012, z * 0.012, 3, 2.0, 0.45) * 4.5;
+  const secondary = noise.noise2D(x * 0.028 + 5.0, z * 0.028 + 5.0) * 1.2;
+  const naturalHeight = baseElev + secondary;
+
+  // 2. Road spline elevation
+  const rx = roadCenterX(z, seed);
+  const distToRoad = Math.abs(x - rx);
+  const roadElevation = Math.sin(z * 0.01) * 2.0;
+
+  const roadBedHalfW = 3.5;  // 7m wide road bed
+  const shoulderHalfW = 4.5; // 9m blend zone
+
+  if (distToRoad <= roadBedHalfW) {
+    // Subtle road crown (center +0.12m higher)
+    const crown = 0.12 * (1.0 - Math.pow(distToRoad / roadBedHalfW, 2));
+    return roadElevation + crown;
+  } else if (distToRoad < (roadBedHalfW + shoulderHalfW)) {
+    const blend = (distToRoad - roadBedHalfW) / shoulderHalfW;
+    const smoothBlend = blend * blend * (3 - 2 * blend);
+    return roadElevation * (1.0 - smoothBlend) + naturalHeight * smoothBlend;
+  }
+
+  return naturalHeight;
+}
+
+/**
+ * Generates raw vertex data for a terrain chunk
+ */
 export function generateTerrainRaw(seed = 1337, lodLevel = 0, options = {}) {
-  const size = options.size || 60; // 60m x 60m chunk
+  const size = options.size || 60;
+  const originX = options.originX || 0;
+  const originZ = options.originZ || 0;
+  const addSkirts = options.addSkirts !== undefined ? options.addSkirts : (options.originX !== undefined);
+
+  // Resolution: default 64 for single asset diorama test, or custom/LOD
   let res = 64;
-  if (lodLevel === 1) res = 48;
-  if (lodLevel >= 2) res = 32;
+  if (options.subdivisions) {
+    res = options.subdivisions;
+  } else if (lodLevel === 1) {
+    res = 48;
+  } else if (lodLevel >= 2) {
+    res = 32;
+  }
 
   const noise = new SimplexNoise(seed);
   const prng = createPRNG(seed);
 
-  // Road spline control points through chunk
-  // Curves slightly along X axis as it goes from z = -size/2 to +size/2
-  const roadCurveX1 = (prng() - 0.5) * 14;
-  const roadCurveX2 = (prng() - 0.5) * 14;
-  const roadPoints = [
-    [-roadCurveX1 * 1.2, 0, -size * 0.6],
-    [roadCurveX1, 0, -size * 0.25],
-    [roadCurveX2, 0, size * 0.25],
-    [-roadCurveX2 * 1.2, 0, size * 0.6]
-  ];
+  const halfSize = size * 0.5;
+  const step = size / (res - 1);
+  const totalGridVerts = res * res;
 
-  const totalVerts = res * res;
+  // Skirt vertices count: 4 borders of (res) vertices
+  const skirtVertsCount = addSkirts ? (res * 4) : 0;
+  const totalVerts = totalGridVerts + skirtVertsCount;
+
   const positions = new Float32Array(totalVerts * 3);
   const normals = new Float32Array(totalVerts * 3);
   const uvs = new Float32Array(totalVerts * 2);
   const colors = new Float32Array(totalVerts * 3);
 
-  const numQuads = (res - 1) * (res - 1);
-  const indices = new Uint32Array(numQuads * 6);
-
-  const halfSize = size * 0.5;
-  const step = size / (res - 1);
-  const roadWidth = 5.0; // 5 meters wide road bed
-  const shoulderWidth = 4.0; // 4 meters blend zone
-
-  // 1. Generate vertex positions, uvs, and initial heights
+  // 1. Populate main grid vertices
   for (let j = 0; j < res; j++) {
-    const z = -halfSize + j * step;
+    const lz = -halfSize + j * step;
+    const wz = originZ + lz;
     const v = j / (res - 1);
 
     for (let i = 0; i < res; i++) {
-      const x = -halfSize + i * step;
+      const lx = -halfSize + i * step;
+      const wx = originX + lx;
       const u = i / (res - 1);
-      const vertIdx = j * res + i;
+      const vIdx = j * res + i;
 
-      // Base rolling hills (fBm)
-      const baseElev = noise.fbm2D(x * 0.025, z * 0.025, 4, 2.0, 0.5) * 7.5;
-      // Eroded gullies (ridged noise)
-      const gully = noise.ridgeNoise2D(x * 0.04 + 10.0, z * 0.04 + 10.0, 3, 2.0, 0.5);
-      const gullyDepth = (1.0 - gully) * 4.5;
+      const y = heightAt(wx, wz, seed);
 
-      let y = baseElev - gullyDepth;
-
-      // Road spline interaction
-      // Approximate spline t parameter based on z normalized from 0 to 1
-      const splineT = Math.max(0, Math.min(1, (z + halfSize) / size));
-      const roadCenter = evaluateSpline(roadPoints, splineT);
-      const distToRoad = Math.hypot(x - roadCenter[0], z - roadCenter[2]);
-
-      // Road elevation is smoothed along spline length
-      const roadHeight = 0.5 + Math.sin(splineT * Math.PI) * 1.5;
-
-      let isRoad = 0.0;
-      if (distToRoad <= roadWidth * 0.5) {
-        // Flattened road bed with subtle crown (center slightly higher)
-        const crown = 0.15 * (1.0 - Math.pow(distToRoad / (roadWidth * 0.5), 2));
-        y = roadHeight + crown;
-        isRoad = 1.0;
-      } else if (distToRoad < (roadWidth * 0.5 + shoulderWidth)) {
-        // Smoothstep transition to natural terrain
-        const blend = (distToRoad - roadWidth * 0.5) / shoulderWidth;
-        const smoothBlend = blend * blend * (3 - 2 * blend);
-        y = roadHeight * (1.0 - smoothBlend) + y * smoothBlend;
-        isRoad = (1.0 - smoothBlend) * 0.8;
-      }
-
-      const pIdx = vertIdx * 3;
-      positions[pIdx] = x;
+      const pIdx = vIdx * 3;
+      positions[pIdx] = lx;
       positions[pIdx + 1] = y;
-      positions[pIdx + 2] = z;
+      positions[pIdx + 2] = lz;
 
-      const uvIdx = vertIdx * 2;
-      uvs[uvIdx] = u * 6.0;
-      uvs[uvIdx + 1] = v * 6.0;
-
-      // Temporary store road factor in normals[pIdx + 1] for coloring pass
-      normals[pIdx + 1] = isRoad;
+      const uvIdx = vIdx * 2;
+      uvs[uvIdx] = u * 4.0;
+      uvs[uvIdx + 1] = v * 4.0;
     }
   }
 
-  // 2. Generate Indices
-  let indexOffset = 0;
+  // 2. Generate Indices for main grid
+  const numGridQuads = (res - 1) * (res - 1);
+  const skirtQuads = addSkirts ? ((res - 1) * 4) : 0;
+  const totalQuads = numGridQuads + skirtQuads;
+  const indices = new Uint32Array(totalQuads * 6);
+
+  let idxOffset = 0;
   for (let j = 0; j < res - 1; j++) {
     for (let i = 0; i < res - 1; i++) {
       const a = j * res + i;
@@ -111,32 +128,82 @@ export function generateTerrainRaw(seed = 1337, lodLevel = 0, options = {}) {
       const c = (j + 1) * res + (i + 1);
       const d = j * res + (i + 1);
 
-      // Two triangles per quad: a-b-d and b-c-d
-      indices[indexOffset++] = a;
-      indices[indexOffset++] = b;
-      indices[indexOffset++] = d;
+      indices[idxOffset++] = a;
+      indices[idxOffset++] = b;
+      indices[idxOffset++] = d;
 
-      indices[indexOffset++] = b;
-      indices[indexOffset++] = c;
-      indices[indexOffset++] = d;
+      indices[idxOffset++] = b;
+      indices[idxOffset++] = c;
+      indices[idxOffset++] = d;
     }
   }
 
-  // 3. Compute surface normals
+  // 3. Optional Skirts along borders (drop down 2.5m to hide cracks between LODs)
+  if (addSkirts) {
+    const skirtDrop = 2.5;
+    let skirtVIdx = totalGridVerts;
+
+    // Helper to stitch skirt along a border
+    const addSkirtEdge = (getGridIdx) => {
+      const startSkirt = skirtVIdx;
+      for (let k = 0; k < res; k++) {
+        const gIdx = getGridIdx(k);
+        const pIdx = skirtVIdx * 3;
+        positions[pIdx] = positions[gIdx * 3];
+        positions[pIdx + 1] = positions[gIdx * 3 + 1] - skirtDrop;
+        positions[pIdx + 2] = positions[gIdx * 3 + 2];
+
+        uvs[skirtVIdx * 2] = uvs[gIdx * 2];
+        uvs[skirtVIdx * 2 + 1] = uvs[gIdx * 2 + 1];
+
+        colors[pIdx] = 0.28;
+        colors[pIdx + 1] = 0.26;
+        colors[pIdx + 2] = 0.24;
+
+        skirtVIdx++;
+      }
+
+      for (let k = 0; k < res - 1; k++) {
+        const topA = getGridIdx(k);
+        const topB = getGridIdx(k + 1);
+        const botA = startSkirt + k;
+        const botB = startSkirt + k + 1;
+
+        indices[idxOffset++] = topA;
+        indices[idxOffset++] = botA;
+        indices[idxOffset++] = topB;
+
+        indices[idxOffset++] = topB;
+        indices[idxOffset++] = botA;
+        indices[idxOffset++] = botB;
+      }
+    };
+
+    // North (j = 0)
+    addSkirtEdge((k) => k);
+    // South (j = res - 1)
+    addSkirtEdge((k) => (res - 1) * res + k);
+    // West (i = 0)
+    addSkirtEdge((k) => k * res);
+    // East (i = res - 1)
+    addSkirtEdge((k) => k * res + (res - 1));
+  }
+
+  // 4. Compute Surface Normals for lighting
   const tempNormals = new Float32Array(totalVerts * 3);
   for (let k = 0; k < indices.length; k += 3) {
     const iA = indices[k] * 3;
     const iB = indices[k + 1] * 3;
     const iC = indices[k + 2] * 3;
 
-    const vAx = positions[iA], vAy = positions[iA + 1], vAz = positions[iA + 2];
-    const vBx = positions[iB], vBy = positions[iB + 1], vBz = positions[iB + 2];
-    const vCx = positions[iC], vCy = positions[iC + 1], vCz = positions[iC + 2];
+    const abX = positions[iB] - positions[iA];
+    const abY = positions[iB + 1] - positions[iA + 1];
+    const abZ = positions[iB + 2] - positions[iA + 2];
 
-    const abX = vBx - vAx, abY = vBy - vAy, abZ = vBz - vAz;
-    const acX = vCx - vAx, acY = vCy - vAy, acZ = vCz - vAz;
+    const acX = positions[iC] - positions[iA];
+    const acY = positions[iC + 1] - positions[iA + 1];
+    const acZ = positions[iC + 2] - positions[iA + 2];
 
-    // Cross product
     const nX = abY * acZ - abZ * acY;
     const nY = abZ * acX - abX * acZ;
     const nZ = abX * acY - abY * acX;
@@ -146,8 +213,8 @@ export function generateTerrainRaw(seed = 1337, lodLevel = 0, options = {}) {
     tempNormals[iC] += nX; tempNormals[iC + 1] += nY; tempNormals[iC + 2] += nZ;
   }
 
-  // 4. Normalize normals & compute slope/height vertex colors
-  for (let i = 0; i < totalVerts; i++) {
+  // 5. Normalize Normals and Compute Smooth Vertex Colors
+  for (let i = 0; i < totalGridVerts; i++) {
     const idx = i * 3;
     const nx = tempNormals[idx];
     const ny = tempNormals[idx + 1];
@@ -162,59 +229,61 @@ export function generateTerrainRaw(seed = 1337, lodLevel = 0, options = {}) {
     normals[idx + 1] = normY;
     normals[idx + 2] = normZ;
 
-    // Slope calculation: dot with Up (0, 1, 0)
-    const slope = Math.max(0, Math.min(1, normY)); // 1 = flat ground, 0 = vertical cliff
-    const height = positions[idx + 1];
+    const wx = originX + positions[idx];
+    const wz = originZ + positions[idx + 2];
 
-    // Colors:
-    // Road: dark asphalt charcoal (0.16, 0.17, 0.18)
-    // Depressions/flat: dusty wasteland dirt (0.48, 0.42, 0.33)
-    // Steep slope: rocky grey (0.35, 0.36, 0.37)
-    // High ridges: irradiated burnt/soot (0.28, 0.26, 0.22)
+    // Road factor
+    const rx = roadCenterX(wz, seed);
+    const distToRoad = Math.abs(wx - rx);
 
-    let r, g, b;
-    if (slope > 0.75) {
-      // Flat/gentle slope: dusty wasteland dirt
-      r = 0.85; g = 0.72; b = 0.54;
-      if (height > 3.0) {
-        // High dry irradiated ridge
-        const t = Math.min(1, (height - 3.0) / 4.0);
-        r = r * (1 - t) + 0.42 * t;
-        g = g * (1 - t) + 0.38 * t;
-        b = b * (1 - t) + 0.32 * t;
-      }
-    } else {
-      // Steep rock face
-      const cliff = (0.75 - slope) / 0.75;
-      r = 0.85 * (1 - cliff) + 0.68 * cliff;
-      g = 0.72 * (1 - cliff) + 0.68 * cliff;
-      b = 0.54 * (1 - cliff) + 0.70 * cliff;
+    // Low-frequency macro color variation across wasteland
+    const macroTint = noise.noise2D(wx * 0.008, wz * 0.008) * 0.08;
+
+    // Base dusty earth color (smooth and low contrast)
+    let r = 0.52 + macroTint;
+    let g = 0.46 + macroTint * 0.9;
+    let b = 0.38 + macroTint * 0.8;
+
+    // Steeper rock slope tint
+    const slope = Math.max(0, Math.min(1, normY));
+    if (slope < 0.85) {
+      const rockFactor = (0.85 - slope) / 0.85;
+      r = r * (1 - rockFactor) + 0.38 * rockFactor;
+      g = g * (1 - rockFactor) + 0.37 * rockFactor;
+      b = b * (1 - rockFactor) + 0.36 * rockFactor;
     }
 
-    // Road corridor overlay
-    const zPos = positions[idx + 2];
-    const xPos = positions[idx];
-    const splineT = Math.max(0, Math.min(1, (zPos + halfSize) / size));
-    const roadCenter = evaluateSpline(roadPoints, splineT);
-    const distToRoad = Math.hypot(xPos - roadCenter[0], zPos - roadCenter[2]);
+    // Road overlay: dark tarmac
+    const roadBedW = 3.5;
+    const shoulderW = 4.5;
 
-    if (distToRoad < roadWidth * 0.5) {
-      // Dark asphalt bed
-      r = 0.28; g = 0.29; b = 0.30;
-      // Faded cracked yellow centerline
-      if (distToRoad < 0.25 && Math.sin(splineT * 40.0) > 0.1) {
-        r = 0.95; g = 0.82; b = 0.20;
+    if (distToRoad < roadBedW) {
+      r = 0.22;
+      g = 0.23;
+      b = 0.24;
+      // Cracked faded yellow centerline
+      if (distToRoad < 0.22 && Math.sin(wz * 0.8) > 0.05) {
+        r = 0.88; g = 0.72; b = 0.22;
       }
-    } else if (distToRoad < roadWidth * 0.5 + shoulderWidth) {
-      const blend = (distToRoad - roadWidth * 0.5) / shoulderWidth;
-      r = 0.28 * (1 - blend) + r * blend;
-      g = 0.29 * (1 - blend) + g * blend;
-      b = 0.30 * (1 - blend) + b * blend;
+    } else if (distToRoad < roadBedW + shoulderW) {
+      const blend = (distToRoad - roadBedW) / shoulderW;
+      const smoothBlend = blend * blend * (3 - 2 * blend);
+      r = 0.22 * (1 - smoothBlend) + r * smoothBlend;
+      g = 0.23 * (1 - smoothBlend) + g * smoothBlend;
+      b = 0.24 * (1 - smoothBlend) + b * smoothBlend;
     }
 
     colors[idx] = r;
     colors[idx + 1] = g;
     colors[idx + 2] = b;
+  }
+
+  // For skirt normals, point outward / down
+  for (let i = totalGridVerts; i < totalVerts; i++) {
+    const idx = i * 3;
+    normals[idx] = 0;
+    normals[idx + 1] = -1;
+    normals[idx + 2] = 0;
   }
 
   return {
@@ -223,7 +292,7 @@ export function generateTerrainRaw(seed = 1337, lodLevel = 0, options = {}) {
     uvs,
     colors,
     indices,
-    triangleCount: numQuads * 2
+    triangleCount: totalQuads * 2
   };
 }
 
