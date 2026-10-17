@@ -212,22 +212,23 @@ export class PlayerController {
 
     // 8. Capsule vs AABB Colliders (Ground Floor Walls) with sliding
     if (worldQuery && worldQuery.queryColliders) {
-      this._queryAABB.min[0] = Math.min(this.position.x, candidateX) - this.radius - 0.5;
-      this._queryAABB.min[1] = this.position.y;
-      this._queryAABB.min[2] = Math.min(this.position.z, candidateZ) - this.radius - 0.5;
+      this._queryAABB.min[0] = Math.min(this.position.x, candidateX) - this.radius - 1.0;
+      this._queryAABB.min[1] = this.position.y - 10.0;
+      this._queryAABB.min[2] = Math.min(this.position.z, candidateZ) - this.radius - 1.0;
 
-      this._queryAABB.max[0] = Math.max(this.position.x, candidateX) + this.radius + 0.5;
-      this._queryAABB.max[1] = this.position.y + this.height;
-      this._queryAABB.max[2] = Math.max(this.position.z, candidateZ) + this.radius + 0.5;
+      this._queryAABB.max[0] = Math.max(this.position.x, candidateX) + this.radius + 1.0;
+      this._queryAABB.max[1] = this.position.y + this.height + 10.0;
+      this._queryAABB.max[2] = Math.max(this.position.z, candidateZ) + this.radius + 1.0;
 
       const colliders = worldQuery.queryColliders(this._queryAABB);
 
       if (colliders && colliders.length > 0) {
-        // Axis-separated resolution for smooth wall sliding
-        // A) Resolve X motion
-        candidateX = this._resolveCapsuleAABB(candidateX, this.position.z, colliders, 'x');
-        // B) Resolve Z motion
-        candidateZ = this._resolveCapsuleAABB(candidateX, candidateZ, colliders, 'z');
+        // Multi-pass resolution for rock-solid wall sliding without clipping or penetrating
+        for (let iter = 0; iter < 2; iter++) {
+          const res = this._resolveCircleAABB(candidateX, candidateZ, colliders);
+          candidateX = res.x;
+          candidateZ = res.z;
+        }
       }
     }
 
@@ -275,9 +276,9 @@ export class PlayerController {
   }
 
   /**
-   * Resolves 2D capsule-circle vs AABB list along one axis
+   * Resolves 2D circle vs AABB list with contact normal sliding and penetration handling
    */
-  _resolveCapsuleAABB(px, pz, colliders, axis) {
+  _resolveCircleAABB(px, pz, colliders) {
     const r = this.radius;
     const py = this.position.y;
     const pTop = py + this.height;
@@ -287,12 +288,17 @@ export class PlayerController {
       const minX = col.min[0], minY = col.min[1], minZ = col.min[2];
       const maxX = col.max[0], maxY = col.max[1], maxZ = col.max[2];
 
-      // Vertical overlap check (ground floor walls, ignore if above or below stepUp)
+      // Vertical overlap check
       if (pTop <= minY || py + this.stepUpHeight >= maxY) {
         continue;
       }
 
-      // Nearest point on AABB in 2D
+      // Quick bounding box check
+      if (px < minX - r || px > maxX + r || pz < minZ - r || pz > maxZ + r) {
+        continue;
+      }
+
+      // Nearest point on AABB to circle center
       const cx = Math.max(minX, Math.min(px, maxX));
       const cz = Math.max(minZ, Math.min(pz, maxZ));
       const dx = px - cx;
@@ -300,29 +306,35 @@ export class PlayerController {
       const distSq = dx * dx + dz * dz;
 
       if (distSq < r * r) {
-        const dist = Math.sqrt(distSq);
-        if (dist > 1e-6) {
+        if (distSq > 1e-6) {
+          const dist = Math.sqrt(distSq);
           const overlap = r - dist;
-          if (axis === 'x') {
-            px += (dx / dist) * overlap;
-          } else {
-            pz += (dz / dist) * overlap;
-          }
+          px += (dx / dist) * overlap;
+          pz += (dz / dist) * overlap;
         } else {
-          // Centered directly inside collider
-          if (axis === 'x') {
-            const pushLeft = minX - r;
-            const pushRight = maxX + r;
-            px = Math.abs(px - pushLeft) < Math.abs(px - pushRight) ? pushLeft : pushRight;
-          } else {
-            const pushBack = minZ - r;
-            const pushFront = maxZ + r;
-            pz = Math.abs(pz - pushBack) < Math.abs(pz - pushFront) ? pushBack : pushFront;
-          }
+          // Circle center is inside AABB, push to nearest exterior boundary
+          const dLeft = px - (minX - r);
+          const dRight = (maxX + r) - px;
+          const dBack = pz - (minZ - r);
+          const dFront = (maxZ + r) - pz;
+          const minDist = Math.min(dLeft, dRight, dBack, dFront);
+
+          if (minDist === dLeft) px = minX - r;
+          else if (minDist === dRight) px = maxX + r;
+          else if (minDist === dBack) pz = minZ - r;
+          else pz = maxZ + r;
         }
       }
     }
 
-    return axis === 'x' ? px : pz;
+    return { x: px, z: pz };
+  }
+
+  /**
+   * Legacy axis-separated helper for backwards compatibility
+   */
+  _resolveCapsuleAABB(px, pz, colliders, axis) {
+    const res = this._resolveCircleAABB(px, pz, colliders);
+    return axis === 'x' ? res.x : res.z;
   }
 }

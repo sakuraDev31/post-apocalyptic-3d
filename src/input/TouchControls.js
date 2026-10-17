@@ -42,6 +42,10 @@ export class TouchControls {
 
     this.buttonPointerIds = new Set();
 
+    // Invert movement options
+    this.invertX = options.invertX || false;
+    this.invertY = options.invertY || false;
+
     // Keyboard & Mouse state
     this.keysPressed = {};
     this.isMouseDown = false;
@@ -326,8 +330,15 @@ export class TouchControls {
       const normDist = clampedDist / maxR;
       if (normDist > this.joystickDeadZone) {
         const effectiveMag = (normDist - this.joystickDeadZone) / (1 - this.joystickDeadZone);
-        this.inputState.moveX = Math.cos(angle) * effectiveMag;
-        this.inputState.moveY = -Math.sin(angle) * effectiveMag; // +1 forward
+        // Correct screen-relative mapping:
+        // Pushing joystick right (angle=0, cos>0) moves right on screen (towards -X in world space)
+        // Pushing joystick left (angle=PI, cos<0) moves left on screen (towards +X in world space)
+        // Pushing joystick up (angle=-PI/2, -sin>0) moves forward / up on screen (towards +Z in world space)
+        // Pushing joystick down (angle=PI/2, -sin<0) moves backward / down on screen (towards -Z in world space)
+        const signX = this.invertX ? 1 : -1;
+        const signY = this.invertY ? -1 : 1;
+        this.inputState.moveX = signX * Math.cos(angle) * effectiveMag;
+        this.inputState.moveY = signY * -Math.sin(angle) * effectiveMag;
       } else {
         this.inputState.moveX = 0;
         this.inputState.moveY = 0;
@@ -356,6 +367,11 @@ export class TouchControls {
     }
   }
 
+  setInvert(invertX, invertY) {
+    this.invertX = !!invertX;
+    this.invertY = !!invertY;
+  }
+
   /**
    * Samples and resets frame input state
    * @returns {import('../core/Contracts.js').InputState}
@@ -368,10 +384,12 @@ export class TouchControls {
     if (this.joystickPointerId === null) {
       let kx = 0;
       let ky = 0;
-      if (this.keysPressed['KeyW'] || this.keysPressed['ArrowUp']) ky += 1;
-      if (this.keysPressed['KeyS'] || this.keysPressed['ArrowDown']) ky -= 1;
-      if (this.keysPressed['KeyA'] || this.keysPressed['ArrowLeft']) kx -= 1;
-      if (this.keysPressed['KeyD'] || this.keysPressed['ArrowRight']) kx += 1;
+      const signY = this.invertY ? -1 : 1;
+      const signX = this.invertX ? -1 : 1;
+      if (this.keysPressed['KeyW'] || this.keysPressed['ArrowUp']) ky += signY;
+      if (this.keysPressed['KeyS'] || this.keysPressed['ArrowDown']) ky -= signY;
+      if (this.keysPressed['KeyA'] || this.keysPressed['ArrowLeft']) kx += signX; // Left on screen (+X world)
+      if (this.keysPressed['KeyD'] || this.keysPressed['ArrowRight']) kx -= signX; // Right on screen (-X world)
 
       if (kx !== 0 || ky !== 0) {
         const len = Math.hypot(kx, ky);

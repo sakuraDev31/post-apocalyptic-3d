@@ -53,8 +53,8 @@ export class WorldStreamer {
   }
 
   _initRoadPoints() {
-    // Sample continuous road points along z
-    for (let z = -250; z <= 250; z += 10) {
+    // Sample continuous road points along z at 4m intervals for smooth minimap curves
+    for (let z = -360; z <= 360; z += 4) {
       const rx = Math.sin(z * 0.015) * 8.0 + Math.sin(z * 0.04) * 3.0;
       this.roadSplinePoints.push([rx, z]);
     }
@@ -70,18 +70,6 @@ export class WorldStreamer {
     this.barricadeGeom.computeVertexNormals();
 
     // 3. Streetlight (bent tubular pole)
-    const pole1 = new THREE.CylinderGeometry(0.08, 0.09, 4.6, 5, 2);
-    pole1.translate(0, 2.3, 0);
-    const arm1 = new THREE.CylinderGeometry(0.06, 0.06, 1.6, 4, 1);
-    arm1.rotateZ(Math.PI / 2);
-    arm1.translate(0.8, 4.6, 0);
-    const lightHead = new THREE.BoxGeometry(0.5, 0.2, 0.3);
-    lightHead.translate(1.5, 4.5, 0);
-
-    const poleGroup = new THREE.Group();
-    poleGroup.add(new THREE.Mesh(pole1), new THREE.Mesh(arm1), new THREE.Mesh(lightHead));
-    this.streetlightGeom = new THREE.BufferGeometry();
-    // Simple merged box/pole approximation
     this.streetlightGeom = new THREE.CylinderGeometry(0.08, 0.09, 4.8, 5, 2);
     this.streetlightGeom.translate(0, 2.4, 0);
 
@@ -92,11 +80,30 @@ export class WorldStreamer {
 
     // 5. Rubble (faceted rock block)
     this.rubbleGeom = new THREE.DodecahedronGeometry(0.5, 0);
+
+    // 6. Rusted Car Chassis Wreck (body + rusted cabin)
+    const carBody = new THREE.BoxGeometry(1.9, 0.65, 3.8);
+    carBody.translate(0, 0.45, 0);
+    const carCabin = new THREE.BoxGeometry(1.6, 0.75, 1.9);
+    carCabin.translate(0, 1.05, -0.2);
+    // Combine car parts into single cached geometry
+    const carGroup = new THREE.Group();
+    carGroup.add(new THREE.Mesh(carBody), new THREE.Mesh(carCabin));
+    this.wreckGeom = new THREE.BoxGeometry(2.0, 1.1, 4.0);
+    this.wreckGeom.translate(0, 0.55, 0);
+
+    // 7. Concrete Road Barrier (Jersey K-rail)
+    this.barrierGeom = new THREE.BoxGeometry(2.8, 0.85, 0.45);
+    this.barrierGeom.translate(0, 0.42, 0);
+
+    // 8. Supply / Scrap Crate
+    this.crateGeom = new THREE.BoxGeometry(0.9, 0.9, 0.9);
+    this.crateGeom.translate(0, 0.45, 0);
   }
 
   setQuality(quality) {
     this.quality = quality;
-    this.activeRadius = quality === 'low' ? 1 : 2;
+    this.activeRadius = quality === 'low' ? 1 : (quality === 'high' ? 3 : 2);
   }
 
   /**
@@ -226,8 +233,8 @@ export class WorldStreamer {
           }
 
           const worldCol = {
-            min: [minWX, b.y + col.min[1], minWZ],
-            max: [maxWX, b.y + col.max[1], maxWZ]
+            min: [minWX, b.y + col.min[1] - 8.0, minWZ],
+            max: [maxWX, b.y + col.max[1] + 16.0, maxWZ]
           };
           chunkColliders.push(worldCol);
         }
@@ -244,7 +251,7 @@ export class WorldStreamer {
       this.activeBuildings.push(chunkBuildings[chunkBuildings.length - 1]);
     }
 
-    // B) Instanced Props (Drums, Barricades, Streetlights)
+    // B) Instanced Props (Drums, Barricades, Streetlights, Wrecks, Road Barriers, Crates)
     this._addInstancedProps(chunkGroup, placement.props, chunkOriginX, chunkOriginZ, chunkColliders);
 
     // C) Instanced Trees
@@ -265,8 +272,8 @@ export class WorldStreamer {
 
         // Small trunk AABB collider
         chunkColliders.push({
-          min: [t.x - 0.35, t.y, t.z - 0.35],
-          max: [t.x + 0.35, t.y + 3.0, t.z + 0.35]
+          min: [t.x - 0.35, t.y - 2.0, t.z - 0.35],
+          max: [t.x + 0.35, t.y + 4.0, t.z + 0.35]
         });
       }
       treeInst.instanceMatrix.needsUpdate = true;
@@ -310,8 +317,11 @@ export class WorldStreamer {
     const drums = props.filter((p) => p.type === 'drum');
     const barricades = props.filter((p) => p.type === 'barricade');
     const streetlights = props.filter((p) => p.type === 'streetlight');
+    const wrecks = props.filter((p) => p.type === 'wreck');
+    const roadBarriers = props.filter((p) => p.type === 'road_barrier');
+    const crates = props.filter((p) => p.type === 'crate');
 
-    // Drums
+    // Drums (1 draw call per chunk)
     if (drums.length > 0) {
       const drumMat = this.materialBank.get(MATERIAL_KEYS.RUST);
       const drumInst = new THREE.InstancedMesh(this.drumGeom, drumMat, drums.length);
@@ -328,15 +338,15 @@ export class WorldStreamer {
         drumInst.setMatrixAt(i, this._dummyMatrix);
 
         chunkColliders.push({
-          min: [d.x - 0.42, d.y, d.z - 0.42],
-          max: [d.x + 0.42, d.y + 1.1, d.z + 0.42]
+          min: [d.x - 0.42, d.y - 1.0, d.z - 0.42],
+          max: [d.x + 0.42, d.y + 1.5, d.z + 0.42]
         });
       }
       drumInst.instanceMatrix.needsUpdate = true;
       chunkGroup.add(drumInst);
     }
 
-    // Barricades
+    // Barricades (1 draw call per chunk)
     if (barricades.length > 0) {
       const scrapMat = this.materialBank.get(MATERIAL_KEYS.METAL_SCRAP);
       const barInst = new THREE.InstancedMesh(this.barricadeGeom, scrapMat, barricades.length);
@@ -353,15 +363,15 @@ export class WorldStreamer {
         barInst.setMatrixAt(i, this._dummyMatrix);
 
         chunkColliders.push({
-          min: [b.x - 1.2, b.y, b.z - 0.4],
-          max: [b.x + 1.2, b.y + 1.3, b.z + 0.4]
+          min: [b.x - 1.2, b.y - 1.0, b.z - 0.4],
+          max: [b.x + 1.2, b.y + 2.0, b.z + 0.4]
         });
       }
       barInst.instanceMatrix.needsUpdate = true;
       chunkGroup.add(barInst);
     }
 
-    // Streetlights
+    // Streetlights (1 draw call per chunk)
     if (streetlights.length > 0) {
       const rebarMat = this.materialBank.get(MATERIAL_KEYS.REBAR);
       const slInst = new THREE.InstancedMesh(this.streetlightGeom, rebarMat, streetlights.length);
@@ -375,9 +385,89 @@ export class WorldStreamer {
         this._dummyScale.set(1, 1, 1);
         this._dummyMatrix.compose(this._dummyPos, this._dummyQuat, this._dummyScale);
         slInst.setMatrixAt(i, this._dummyMatrix);
+
+        chunkColliders.push({
+          min: [s.x - 0.25, s.y - 1.0, s.z - 0.25],
+          max: [s.x + 0.25, s.y + 5.0, s.z + 0.25]
+        });
       }
       slInst.instanceMatrix.needsUpdate = true;
       chunkGroup.add(slInst);
+    }
+
+    // Rusted Car Wrecks (1 draw call per chunk)
+    if (wrecks.length > 0) {
+      const rustMat = this.materialBank.get(MATERIAL_KEYS.RUST);
+      const wreckInst = new THREE.InstancedMesh(this.wreckGeom, rustMat, wrecks.length);
+      wreckInst.castShadow = true;
+      wreckInst.receiveShadow = true;
+
+      for (let i = 0; i < wrecks.length; i++) {
+        const w = wrecks[i];
+        this._dummyPos.set(w.x - originX, w.y, w.z - originZ);
+        this._dummyRot.set(0, w.yaw, 0);
+        this._dummyQuat.setFromEuler(this._dummyRot);
+        this._dummyScale.set(1, 1, 1);
+        this._dummyMatrix.compose(this._dummyPos, this._dummyQuat, this._dummyScale);
+        wreckInst.setMatrixAt(i, this._dummyMatrix);
+
+        chunkColliders.push({
+          min: [w.x - 1.1, w.y - 1.0, w.z - 2.1],
+          max: [w.x + 1.1, w.y + 1.8, w.z + 2.1]
+        });
+      }
+      wreckInst.instanceMatrix.needsUpdate = true;
+      chunkGroup.add(wreckInst);
+    }
+
+    // Concrete Road Barriers (1 draw call per chunk)
+    if (roadBarriers.length > 0) {
+      const concreteMat = this.materialBank.get(MATERIAL_KEYS.CONCRETE);
+      const barrierInst = new THREE.InstancedMesh(this.barrierGeom, concreteMat, roadBarriers.length);
+      barrierInst.castShadow = true;
+      barrierInst.receiveShadow = true;
+
+      for (let i = 0; i < roadBarriers.length; i++) {
+        const rb = roadBarriers[i];
+        this._dummyPos.set(rb.x - originX, rb.y, rb.z - originZ);
+        this._dummyRot.set(0, rb.yaw, 0);
+        this._dummyQuat.setFromEuler(this._dummyRot);
+        this._dummyScale.set(1, 1, 1);
+        this._dummyMatrix.compose(this._dummyPos, this._dummyQuat, this._dummyScale);
+        barrierInst.setMatrixAt(i, this._dummyMatrix);
+
+        chunkColliders.push({
+          min: [rb.x - 1.4, rb.y - 1.0, rb.z - 0.35],
+          max: [rb.x + 1.4, rb.y + 1.2, rb.z + 0.35]
+        });
+      }
+      barrierInst.instanceMatrix.needsUpdate = true;
+      chunkGroup.add(barrierInst);
+    }
+
+    // Crates & Supplies (1 draw call per chunk)
+    if (crates.length > 0) {
+      const scrapMat = this.materialBank.get(MATERIAL_KEYS.METAL_SCRAP);
+      const crateInst = new THREE.InstancedMesh(this.crateGeom, scrapMat, crates.length);
+      crateInst.castShadow = true;
+      crateInst.receiveShadow = true;
+
+      for (let i = 0; i < crates.length; i++) {
+        const c = crates[i];
+        this._dummyPos.set(c.x - originX, c.y, c.z - originZ);
+        this._dummyRot.set(0, c.yaw, 0);
+        this._dummyQuat.setFromEuler(this._dummyRot);
+        this._dummyScale.set(1, 1, 1);
+        this._dummyMatrix.compose(this._dummyPos, this._dummyQuat, this._dummyScale);
+        crateInst.setMatrixAt(i, this._dummyMatrix);
+
+        chunkColliders.push({
+          min: [c.x - 0.5, c.y - 1.0, c.z - 0.5],
+          max: [c.x + 0.5, c.y + 1.2, c.z + 0.5]
+        });
+      }
+      crateInst.instanceMatrix.needsUpdate = true;
+      chunkGroup.add(crateInst);
     }
   }
 

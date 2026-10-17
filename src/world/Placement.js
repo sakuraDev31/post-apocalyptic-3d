@@ -177,7 +177,7 @@ export function getChunkPlacement(chunkX, chunkZ, worldSeed, heightAt) {
 
   // Oil drums clustered near buildings or scattered
   for (const b of buildings) {
-    const numDrums = 2 + Math.floor(prng() * 3);
+    const numDrums = 2 + Math.floor(prng() * 2);
     for (let d = 0; d < numDrums; d++) {
       if (props.length >= 24) break;
       const angle = prng() * Math.PI * 2;
@@ -191,6 +191,53 @@ export function getChunkPlacement(chunkX, chunkZ, worldSeed, heightAt) {
         type: 'drum',
         x: dx, y: dy, z: dz,
         yaw: prng() * Math.PI * 2,
+        scale: [1, 1, 1]
+      });
+    }
+  }
+
+  // Supply / scrap crates near buildings
+  for (const b of buildings) {
+    if (props.length >= 24) break;
+    const cx = b.x + (prng() > 0.5 ? 4.8 : -4.8);
+    const cz = b.z + (prng() > 0.5 ? 4.8 : -4.8);
+    if (!isRoad(cx, cz, 5.5)) {
+      props.push({
+        type: 'crate',
+        x: cx, y: heightAt(cx, cz, worldSeed), z: cz,
+        yaw: prng() * 1.5,
+        scale: [1, 1, 1]
+      });
+    }
+  }
+
+  // Concrete road barriers along curves
+  for (let s = 0; s < numRoadSteps; s++) {
+    if (props.length >= 24) break;
+    const wz = originZ - chunkSize * 0.5 + (s + 0.3) * (chunkSize / numRoadSteps);
+    const rx = roadCenterX(wz, worldSeed);
+    const side = s % 2 === 0 ? 1 : -1;
+    const barX = rx + side * 4.4;
+    const barY = heightAt(barX, wz, worldSeed);
+    props.push({
+      type: 'road_barrier',
+      x: barX, y: barY, z: wz,
+      yaw: 0.1,
+      scale: [1, 1, 1]
+    });
+  }
+
+  // Rusted vehicle wrecks on road shoulders or near buildings (1 per chunk if room)
+  if (props.length < 24) {
+    const wz = originZ + (prng() - 0.5) * 24;
+    const rx = roadCenterX(wz, worldSeed);
+    const side = prng() > 0.5 ? 1 : -1;
+    const wx = rx + side * (6.5 + prng() * 2.0);
+    if (!isRoad(wx, wz, 5.0)) {
+      props.push({
+        type: 'wreck',
+        x: wx, y: heightAt(wx, wz, worldSeed), z: wz,
+        yaw: prng() * Math.PI,
         scale: [1, 1, 1]
       });
     }

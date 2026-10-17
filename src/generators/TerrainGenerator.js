@@ -253,24 +253,57 @@ export function generateTerrainRaw(seed = 1337, lodLevel = 0, options = {}) {
       b = b * (1 - rockFactor) + 0.36 * rockFactor;
     }
 
-    // Road overlay: dark tarmac
+    // Road overlay: detailed textured asphalt with curve markings & shoulders
     const roadBedW = 3.5;
     const shoulderW = 4.5;
 
     if (distToRoad < roadBedW) {
-      r = 0.22;
-      g = 0.23;
-      b = 0.24;
+      // Base dark aged tarmac with micro-noise
+      const tarmacNoise = noise.noise2D(wx * 0.2, wz * 0.2) * 0.03;
+      r = 0.20 + tarmacNoise;
+      g = 0.21 + tarmacNoise;
+      b = 0.22 + tarmacNoise;
+
+      // Darker wheel wear tracks along the curve lanes (+/- 1.6m from center)
+      const distFromLane = Math.min(Math.abs(distToRoad - 1.6), Math.abs(distToRoad + 1.6));
+      if (distFromLane < 0.6) {
+        const laneWear = (1.0 - distFromLane / 0.6) * 0.05;
+        r = Math.max(0.12, r - laneWear);
+        g = Math.max(0.13, g - laneWear);
+        b = Math.max(0.14, b - laneWear);
+      }
+
+      // Faded white/weathered road edge lines along curves (at 3.1m - 3.3m)
+      if (distToRoad > 3.05 && distToRoad < 3.35) {
+        const dash = Math.sin(wz * 0.35);
+        if (dash > -0.4) {
+          r = 0.72; g = 0.70; b = 0.65;
+        }
+      }
+
       // Cracked faded yellow centerline
       if (distToRoad < 0.22 && Math.sin(wz * 0.8) > 0.05) {
         r = 0.88; g = 0.72; b = 0.22;
       }
     } else if (distToRoad < roadBedW + shoulderW) {
+      // Gravel shoulder with dusty blend
       const blend = (distToRoad - roadBedW) / shoulderW;
       const smoothBlend = blend * blend * (3 - 2 * blend);
-      r = 0.22 * (1 - smoothBlend) + r * smoothBlend;
-      g = 0.23 * (1 - smoothBlend) + g * smoothBlend;
-      b = 0.24 * (1 - smoothBlend) + b * smoothBlend;
+      const shoulderR = 0.38 + noise.noise2D(wx * 0.1, wz * 0.1) * 0.04;
+      const shoulderG = 0.34 + noise.noise2D(wx * 0.1, wz * 0.1) * 0.03;
+      const shoulderB = 0.28;
+
+      const baseRoadR = 0.20;
+      const baseRoadG = 0.21;
+      const baseRoadB = 0.22;
+
+      const midR = baseRoadR * (1 - smoothBlend) + shoulderR * smoothBlend;
+      const midG = baseRoadG * (1 - smoothBlend) + shoulderG * smoothBlend;
+      const midB = baseRoadB * (1 - smoothBlend) + shoulderB * smoothBlend;
+
+      r = midR * (1 - smoothBlend) + r * smoothBlend;
+      g = midG * (1 - smoothBlend) + g * smoothBlend;
+      b = midB * (1 - smoothBlend) + b * smoothBlend;
     }
 
     colors[idx] = r;

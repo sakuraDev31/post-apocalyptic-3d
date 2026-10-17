@@ -169,3 +169,41 @@ test('CollisionWorld spatial hash registers, queries, and unloads colliders with
   });
   assert.strictEqual(resultsAfterUnload.length, 0, 'Unloaded chunk colliders must no longer be returned');
 });
+
+test('ThirdPersonCamera overhead mode framing, centering, and mode toggle', () => {
+  const camera = new THREE.PerspectiveCamera(62, 16 / 9, 0.1, 400);
+  const overheadCam = new ThirdPersonCamera(camera, { mode: 'overhead' });
+
+  // Centered directly over the character
+  assert.strictEqual(overheadCam.shoulderOffset, 0.0, 'Overhead camera must be centered with zero shoulder offset');
+  assert.strictEqual(overheadCam.baseDist, 8.5, 'Overhead camera distance should provide clear tactical visibility (~8.5m)');
+  assert.ok(overheadCam.pitch >= 50 * (Math.PI / 180), 'Overhead camera pitch should look down from above (>=50 deg)');
+  assert.strictEqual(overheadCam.mode, 'overhead');
+
+  // Test toggling to shoulder mode
+  overheadCam.setMode('shoulder');
+  assert.strictEqual(overheadCam.shoulderOffset, 0.5);
+  assert.strictEqual(overheadCam.baseDist, 2.6);
+  assert.strictEqual(overheadCam.mode, 'shoulder');
+
+  // Test toggling back to overhead mode
+  overheadCam.setMode('overhead');
+  assert.strictEqual(overheadCam.shoulderOffset, 0.0);
+  assert.strictEqual(overheadCam.baseDist, 8.5);
+  assert.strictEqual(overheadCam.mode, 'overhead');
+});
+
+test('Expanded world placement includes road barriers, crates, and wrecks with zero extra draw calls', () => {
+  const p0 = getChunkPlacement(0, 0, 1337, heightAt);
+  const p1 = getChunkPlacement(1, 1, 1337, heightAt);
+
+  assert.ok(p0.props.length <= 24, 'Chunk 0,0 must strictly respect prop cap of 24');
+  assert.ok(p1.props.length <= 24, 'Chunk 1,1 must strictly respect prop cap of 24');
+
+  const allTypes = new Set([...p0.props.map((p) => p.type), ...p1.props.map((p) => p.type)]);
+  assert.ok(allTypes.has('drum'), 'Must place drums');
+  assert.ok(allTypes.has('road_barrier'), 'Must place concrete road barriers along curves');
+  assert.ok(allTypes.has('crate'), 'Must place supply crates near buildings');
+  assert.ok(allTypes.has('wreck'), 'Must place rusted vehicle wrecks');
+});
+

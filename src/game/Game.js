@@ -43,11 +43,13 @@ export class Game {
     this.fpsTimer = performance.now();
     this.currentFps = 60;
 
+    this.brightness = 1.25;
     this.initScene();
     this.initWorld();
     this.initPlayer();
     this.initUI();
     this.applyQuality(this.quality);
+    this.setBrightness(this.brightness);
 
     this.animate = this.animate.bind(this);
   }
@@ -55,34 +57,40 @@ export class Game {
   initScene() {
     this.scene = new THREE.Scene();
 
-    // Ash Dusk default atmosphere
-    const bgCol = 0x24191c;
+    // Natural dusty post-apocalyptic daylight sky (no blood-red fog!)
+    const bgCol = 0xb5b0a4;
     this.scene.background = new THREE.Color(bgCol);
-    this.scene.fog = new THREE.Fog(bgCol, 15, 150);
+    this.scene.fog = new THREE.Fog(bgCol, 35, 220);
 
     this.camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.1, 400);
 
-    // Directional Shadow Sun following player
-    this.dirLight = new THREE.DirectionalLight(0xff7744, 2.0);
-    this.dirLight.position.set(25, 45, 20);
+    // Directional Overhead Sun following player with crisp daylight shadows
+    this.dirLight = new THREE.DirectionalLight(0xfff8ee, 2.6);
+    this.dirLight.position.set(10, 65, 14);
     this.dirLight.castShadow = true;
     this.dirLight.shadow.mapSize.width = 1024;
     this.dirLight.shadow.mapSize.height = 1024;
     this.dirLight.shadow.camera.near = 1;
-    this.dirLight.shadow.camera.far = 120;
-    this.dirLight.shadow.camera.left = -20;
-    this.dirLight.shadow.camera.right = 20;
-    this.dirLight.shadow.camera.top = 20;
-    this.dirLight.shadow.camera.bottom = -20;
-    this.dirLight.shadow.bias = -0.0006;
+    this.dirLight.shadow.camera.far = 140;
+    this.dirLight.shadow.camera.left = -28;
+    this.dirLight.shadow.camera.right = 28;
+    this.dirLight.shadow.camera.top = 28;
+    this.dirLight.shadow.camera.bottom = -28;
+    this.dirLight.shadow.bias = -0.0005;
     this.scene.add(this.dirLight);
     this.scene.add(this.dirLight.target);
 
-    // Ambient & Hemisphere Lighting
-    this.hemiLight = new THREE.HemisphereLight(0x4a425a, 0x201815, 0.75);
+    // Visual Overhead Sun disk in the sky
+    const sunGeom = new THREE.SphereGeometry(6.0, 16, 16);
+    const sunMat = new THREE.MeshBasicMaterial({ color: 0xfffae2 });
+    this.sunMesh = new THREE.Mesh(sunGeom, sunMat);
+    this.scene.add(this.sunMesh);
+
+    // Ambient & Hemisphere Lighting for bright, crisp wasteland visibility
+    this.hemiLight = new THREE.HemisphereLight(0x98c5f7, 0x64543e, 1.2);
     this.scene.add(this.hemiLight);
 
-    this.ambLight = new THREE.AmbientLight(0x22181a, 0.6);
+    this.ambLight = new THREE.AmbientLight(0x444038, 0.85);
     this.scene.add(this.ambLight);
   }
 
@@ -106,9 +114,10 @@ export class Game {
     const spawnY = this.collisionWorld.heightAt(0, 0);
     this.playerController.spawn(0, spawnY, 0, 0);
 
+    // Default to overhead camera of the model
     this.thirdPersonCamera = new ThirdPersonCamera(this.camera, {
+      mode: 'overhead',
       initialYaw: 0,
-      initialPitch: 0.12,
       sensitivity: 0.12
     });
   }
@@ -125,6 +134,8 @@ export class Game {
       container: this.container,
       sensitivity: 0.12,
       quality: this.quality,
+      brightness: this.brightness,
+      cameraMode: this.thirdPersonCamera.mode,
       onPauseToggle: (paused) => {
         this.isPaused = paused;
       },
@@ -136,6 +147,15 @@ export class Game {
       },
       onQualityChange: (q) => {
         this.applyQuality(q);
+      },
+      onBrightnessChange: (b) => {
+        this.setBrightness(b);
+      },
+      onCameraModeToggle: (mode) => {
+        this.setCameraMode(mode);
+      },
+      onInvertToggle: (invX, invY) => {
+        this.touchControls.setInvert(invX, invY);
       },
       onBackToMenu: () => {
         this.stop();
@@ -150,6 +170,20 @@ export class Game {
     window.addEventListener('resize', this.onResize);
   }
 
+  setBrightness(factor) {
+    this.brightness = Math.max(0.5, Math.min(2.5, factor));
+    if (this.renderer) {
+      this.renderer.toneMappingExposure = 1.05 * this.brightness;
+    }
+    if (this.dirLight) this.dirLight.intensity = 2.6 * this.brightness;
+    if (this.hemiLight) this.hemiLight.intensity = 1.2 * this.brightness;
+    if (this.ambLight) this.ambLight.intensity = 0.85 * this.brightness;
+  }
+
+  setCameraMode(mode) {
+    this.thirdPersonCamera.setMode(mode);
+  }
+
   applyQuality(tier) {
     this.quality = tier;
     if (this.gameHUD) this.gameHUD.setQuality(tier);
@@ -158,21 +192,21 @@ export class Game {
 
     if (tier === 'low') {
       this.renderer.shadowMap.enabled = false;
-      this.scene.fog.far = 100;
+      this.scene.fog.far = 140;
     } else if (tier === 'medium') {
       this.renderer.shadowMap.enabled = true;
       this.dirLight.shadow.mapSize.width = 1024;
       this.dirLight.shadow.mapSize.height = 1024;
       this.dirLight.shadow.map?.dispose();
       this.dirLight.shadow.map = null;
-      this.scene.fog.far = 150;
+      this.scene.fog.far = 220;
     } else if (tier === 'high') {
       this.renderer.shadowMap.enabled = true;
       this.dirLight.shadow.mapSize.width = 2048;
       this.dirLight.shadow.mapSize.height = 2048;
       this.dirLight.shadow.map?.dispose();
       this.dirLight.shadow.map = null;
-      this.scene.fog.far = 150;
+      this.scene.fog.far = 260;
     }
   }
 
@@ -268,11 +302,14 @@ export class Game {
     // 3. World Streaming around Player
     this.worldStreamer.update(this.playerController.position);
 
-    // 4. Directional light and shadow follows player
+    // 4. Directional overhead sun and shadow follows player
     const pPos = this.playerController.position;
-    this.dirLight.position.set(pPos.x + 25, pPos.y + 45, pPos.z + 20);
+    this.dirLight.position.set(pPos.x + 10, pPos.y + 65, pPos.z + 14);
     this.dirLight.target.position.set(pPos.x, pPos.y, pPos.z);
     this.dirLight.target.updateMatrixWorld();
+    if (this.sunMesh) {
+      this.sunMesh.position.set(pPos.x + 35, pPos.y + 220, pPos.z + 45);
+    }
 
     // 5. Update HUD Vitals, Compass & Minimap
     this.gameHUD.setStamina(this.playerController.stamina);

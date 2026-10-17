@@ -19,11 +19,17 @@ export class GameHUD {
     this.onSensitivityChange = options.onSensitivityChange || (() => {});
     this.onQualityChange = options.onQualityChange || (() => {});
     this.onBackToMenu = options.onBackToMenu || (() => {});
+    this.onBrightnessChange = options.onBrightnessChange || (() => {});
+    this.onCameraModeToggle = options.onCameraModeToggle || (() => {});
+    this.onInvertToggle = options.onInvertToggle || (() => {});
 
     this.isPaused = false;
     this.showTelemetry = false;
     this.sensitivity = options.sensitivity || 0.12;
     this.quality = options.quality || 'medium';
+    this.brightness = options.brightness !== undefined ? options.brightness : 1.25;
+    this.cameraMode = options.cameraMode || 'overhead';
+    this.invertJoystick = false;
 
     this.initDOM();
   }
@@ -85,6 +91,30 @@ export class GameHUD {
     this.minimapCtx = this.minimapCanvas.getContext('2d');
     this.topRight.appendChild(this.minimapCanvas);
 
+    // Quick Camera Mode Toggle Button
+    this.camToggleBtn = document.createElement('button');
+    this.camToggleBtn.type = 'button';
+    this.camToggleBtn.className = 'hud-quick-btn hud-cam-btn';
+    this.camToggleBtn.textContent = this.cameraMode === 'overhead' ? '🎥 OVERHEAD' : '🎥 SHOULDER';
+    this.camToggleBtn.title = 'Toggle Camera View';
+    this.camToggleBtn.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+      this.toggleCameraMode();
+    });
+    this.topRight.appendChild(this.camToggleBtn);
+
+    // Quick Brightness Button
+    this.brightBtn = document.createElement('button');
+    this.brightBtn.type = 'button';
+    this.brightBtn.className = 'hud-quick-btn hud-bright-btn';
+    this.brightBtn.textContent = `☀️ ${(this.brightness * 100).toFixed(0)}%`;
+    this.brightBtn.title = 'Cycle Scene Brightness';
+    this.brightBtn.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+      this.cycleBrightness();
+    });
+    this.topRight.appendChild(this.brightBtn);
+
     // Pause Button
     this.pauseBtn = document.createElement('button');
     this.pauseBtn.type = 'button';
@@ -132,6 +162,24 @@ export class GameHUD {
       <div class="pause-box">
         <div class="pause-title">PAUSED</div>
         <div class="pause-item">
+          <label>SCENE BRIGHTNESS: <span id="bright-val">${(this.brightness * 100).toFixed(0)}%</span></label>
+          <input id="bright-slider" type="range" min="0.60" max="2.40" step="0.05" value="${this.brightness}">
+        </div>
+        <div class="pause-item">
+          <label>CAMERA VIEW:</label>
+          <div class="quality-btn-group" id="cam-btn-group">
+            <button type="button" class="q-btn cam-btn ${this.cameraMode === 'overhead' ? 'active' : ''}" data-mode="overhead">OVERHEAD</button>
+            <button type="button" class="q-btn cam-btn ${this.cameraMode === 'shoulder' ? 'active' : ''}" data-mode="shoulder">SHOULDER</button>
+          </div>
+        </div>
+        <div class="pause-item">
+          <label>INVERT JOYSTICK:</label>
+          <div class="quality-btn-group" id="inv-btn-group">
+            <button type="button" class="q-btn inv-btn ${!this.invertJoystick ? 'active' : ''}" data-inv="normal">NORMAL</button>
+            <button type="button" class="q-btn inv-btn ${this.invertJoystick ? 'active' : ''}" data-inv="inverted">INVERTED</button>
+          </div>
+        </div>
+        <div class="pause-item">
           <label>LOOK SENSITIVITY: <span id="sens-val">${this.sensitivity.toFixed(2)}</span></label>
           <input id="sens-slider" type="range" min="0.05" max="0.30" step="0.01" value="${this.sensitivity}">
         </div>
@@ -153,6 +201,7 @@ export class GameHUD {
         </div>
       </div>
     `;
+    this.pauseModal.addEventListener('pointerdown', (e) => e.stopPropagation());
     this.root.appendChild(this.pauseModal);
 
     this.bindPauseEvents();
@@ -274,9 +323,32 @@ export class GameHUD {
         align-items: center;
         justify-content: center;
         cursor: pointer;
+        touch-action: none;
       }
       .hud-pause-btn:active {
         background: rgba(232, 163, 61, 0.3);
+      }
+      .hud-quick-btn {
+        height: 38px;
+        padding: 0 10px;
+        border-radius: 8px;
+        background: rgba(14, 16, 20, 0.78);
+        border: 1px solid rgba(232, 163, 61, 0.5);
+        color: #e8a33d;
+        font-family: monospace;
+        font-size: 11px;
+        font-weight: bold;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        white-space: nowrap;
+        user-select: none;
+        touch-action: none;
+      }
+      .hud-quick-btn:active {
+        background: rgba(232, 163, 61, 0.35);
+        transform: scale(0.96);
       }
       .hud-in-game-telemetry {
         position: absolute;
@@ -398,6 +470,34 @@ export class GameHUD {
   }
 
   bindPauseEvents() {
+    const brightSlider = this.pauseModal.querySelector('#bright-slider');
+    const brightVal = this.pauseModal.querySelector('#bright-val');
+    if (brightSlider) {
+      brightSlider.addEventListener('input', (e) => {
+        const val = parseFloat(e.target.value);
+        this.setBrightness(val);
+      });
+    }
+
+    const camBtns = this.pauseModal.querySelectorAll('.cam-btn');
+    camBtns.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const mode = btn.getAttribute('data-mode');
+        this.setCameraMode(mode);
+      });
+    });
+
+    const invBtns = this.pauseModal.querySelectorAll('.inv-btn');
+    invBtns.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        invBtns.forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
+        this.invertJoystick = (btn.getAttribute('data-inv') === 'inverted');
+        this.onInvertToggle(this.invertJoystick, this.invertJoystick);
+        this.showToast(`Joystick: ${this.invertJoystick ? 'INVERTED' : 'NORMAL'}`);
+      });
+    });
+
     const slider = this.pauseModal.querySelector('#sens-slider');
     const sensVal = this.pauseModal.querySelector('#sens-val');
     slider.addEventListener('input', (e) => {
@@ -433,6 +533,56 @@ export class GameHUD {
       this.setPaused(false);
       this.onBackToMenu();
     });
+  }
+
+  toggleCameraMode() {
+    this.cameraMode = (this.cameraMode === 'overhead' ? 'shoulder' : 'overhead');
+    if (this.camToggleBtn) {
+      this.camToggleBtn.textContent = this.cameraMode === 'overhead' ? '🎥 OVERHEAD' : '🎥 SHOULDER';
+    }
+    const camBtns = this.pauseModal.querySelectorAll('.cam-btn');
+    camBtns.forEach((b) => {
+      b.classList.toggle('active', b.getAttribute('data-mode') === this.cameraMode);
+    });
+    this.onCameraModeToggle(this.cameraMode);
+    this.showToast(`Camera: ${this.cameraMode.toUpperCase()}`);
+  }
+
+  setCameraMode(mode) {
+    this.cameraMode = mode;
+    if (this.camToggleBtn) {
+      this.camToggleBtn.textContent = this.cameraMode === 'overhead' ? '🎥 OVERHEAD' : '🎥 SHOULDER';
+    }
+    const camBtns = this.pauseModal.querySelectorAll('.cam-btn');
+    camBtns.forEach((b) => {
+      b.classList.toggle('active', b.getAttribute('data-mode') === this.cameraMode);
+    });
+    this.onCameraModeToggle(this.cameraMode);
+  }
+
+  cycleBrightness() {
+    const steps = [1.0, 1.3, 1.6, 2.0];
+    let nextIdx = 0;
+    for (let i = 0; i < steps.length; i++) {
+      if (this.brightness >= steps[i] - 0.05 && this.brightness < steps[i] + 0.05) {
+        nextIdx = (i + 1) % steps.length;
+        break;
+      }
+    }
+    this.setBrightness(steps[nextIdx]);
+    this.showToast(`Brightness: ${(this.brightness * 100).toFixed(0)}%`);
+  }
+
+  setBrightness(factor) {
+    this.brightness = Math.max(0.5, Math.min(2.5, factor));
+    if (this.brightBtn) {
+      this.brightBtn.textContent = `☀️ ${(this.brightness * 100).toFixed(0)}%`;
+    }
+    const brightSlider = this.pauseModal.querySelector('#bright-slider');
+    const brightVal = this.pauseModal.querySelector('#bright-val');
+    if (brightSlider) brightSlider.value = this.brightness;
+    if (brightVal) brightVal.textContent = `${(this.brightness * 100).toFixed(0)}%`;
+    this.onBrightnessChange(this.brightness);
   }
 
   togglePause() {

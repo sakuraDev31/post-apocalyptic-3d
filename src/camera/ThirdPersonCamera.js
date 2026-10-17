@@ -19,29 +19,36 @@ import * as THREE from 'three';
 export class ThirdPersonCamera {
   constructor(camera, options = {}) {
     this.camera = camera;
-    this.camera.fov = 62;
+    this.camera.fov = options.fov || 62;
     this.camera.updateProjectionMatrix();
+
+    this.mode = options.mode || 'shoulder'; // 'overhead' | 'shoulder'
+    this.isOverhead = this.mode === 'overhead';
 
     // Orientation
     this.yaw = options.initialYaw || 0;
-    this.pitch = options.initialPitch || 0.15; // Slightly looking down (~8.5 deg)
+    this.pitch = options.initialPitch !== undefined
+      ? options.initialPitch
+      : (this.isOverhead ? 58 * (Math.PI / 180) : 0.15); // ~58 deg looking down for overhead, ~8.5 deg for shoulder
     this.sensitivity = options.sensitivity || 0.12; // deg per pixel
 
     // Limits in radians
-    this.minPitch = -20 * (Math.PI / 180); // -20 deg (camera low)
-    this.maxPitch = 55 * (Math.PI / 180);  // +55 deg (camera high)
+    this.minPitch = this.isOverhead ? 25 * (Math.PI / 180) : -20 * (Math.PI / 180);
+    this.maxPitch = this.isOverhead ? 82 * (Math.PI / 180) : 55 * (Math.PI / 180);
 
     // Offsets & Distances
-    this.shoulderOffset = 0.5; // Right shoulder +0.5m
-    this.baseDist = 2.6;
-    this.crouchDist = 2.3;
-    this.sprintDist = 2.9;
-    this.minDist = 0.7;
+    this.shoulderOffset = options.shoulderOffset !== undefined
+      ? options.shoulderOffset
+      : (this.isOverhead ? 0.0 : 0.5); // Centered over model in overhead mode
+    this.baseDist = this.isOverhead ? 8.5 : 2.6;
+    this.crouchDist = this.isOverhead ? 7.5 : 2.3;
+    this.sprintDist = this.isOverhead ? 9.5 : 2.9;
+    this.minDist = this.isOverhead ? 1.5 : 0.7;
 
     // Smoothing state
     this.currentPivot = new THREE.Vector3(0, 1.5, 0);
     this.currentDist = this.baseDist;
-    this.currentFov = 62;
+    this.currentFov = this.camera.fov;
     this.smoothRate = 14.0; // 14/s
 
     // Reusable vectors to avoid allocations
@@ -53,6 +60,30 @@ export class ThirdPersonCamera {
     this._actualPos = new THREE.Vector3();
     this._lookTarget = new THREE.Vector3();
     this._rayAABB = { min: [0, 0, 0], max: [0, 0, 0] };
+  }
+
+  setMode(mode) {
+    this.mode = mode;
+    this.isOverhead = (mode === 'overhead');
+    if (this.isOverhead) {
+      this.shoulderOffset = 0.0;
+      this.baseDist = 8.5;
+      this.crouchDist = 7.5;
+      this.sprintDist = 9.5;
+      this.minDist = 1.5;
+      this.minPitch = 25 * (Math.PI / 180);
+      this.maxPitch = 82 * (Math.PI / 180);
+      this.pitch = Math.max(this.minPitch, Math.min(this.maxPitch, 58 * (Math.PI / 180)));
+    } else {
+      this.shoulderOffset = 0.5;
+      this.baseDist = 2.6;
+      this.crouchDist = 2.3;
+      this.sprintDist = 2.9;
+      this.minDist = 0.7;
+      this.minPitch = -20 * (Math.PI / 180);
+      this.maxPitch = 55 * (Math.PI / 180);
+      this.pitch = Math.max(this.minPitch, Math.min(this.maxPitch, 0.15));
+    }
   }
 
   /**
