@@ -12,8 +12,9 @@
 - **Git Repo**: `https://github.com/sakuraDev31/post-apocalyptic-3d` (remote `origin/main`).
 - **Current Completion Status**:
   - **Phase 1 (Procedural 3D Asset Studio)**: 100% Complete & Verified.
-  - **Phase 2 (Playable World & Scavenger Player)**: 100% Complete & Verified (28/28 tests passing).
-  - **Pending Hard Gate**: Awaiting user approval: **`APPROVED - PROCEED TO PHASE 3`**.
+  - **Phase 2 (Playable World & Scavenger Player)**: 100% Complete & Verified.
+  - **Phase 3A (Controls, Camera Overhaul, Jump/Crouch Physics & HUD)**: 100% Complete & Verified (40/40 tests passing, APK built & deployed).
+  - **Next Up**: Phase 3B (Scavenging Mechanics, Loot Spawns & Inventory Economy).
 
 ---
 
