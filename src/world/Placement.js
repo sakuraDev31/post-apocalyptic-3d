@@ -56,7 +56,7 @@ export function getChunkPlacement(chunkX, chunkZ, worldSeed, heightAt) {
     // 1. Industrial Warehouse (+X, -Z)
     const whX = 24.0;
     const whZ = -14.0;
-    const whY = heightAt(whX, whZ, worldSeed);
+    const whY = heightAt(whX, whZ, worldSeed) - 0.15;
     buildings.push({
       archetype: 'warehouse',
       x: whX, y: whY, z: whZ,
@@ -67,7 +67,7 @@ export function getChunkPlacement(chunkX, chunkZ, worldSeed, heightAt) {
     // 2. Low-Rise Apartment (-X, +Z)
     const apX = -24.0;
     const apZ = 18.0;
-    const apY = heightAt(apX, apZ, worldSeed);
+    const apY = heightAt(apX, apZ, worldSeed) - 0.15;
     buildings.push({
       archetype: 'apartment',
       x: apX, y: apY, z: apZ,
@@ -78,7 +78,7 @@ export function getChunkPlacement(chunkX, chunkZ, worldSeed, heightAt) {
     // 3. Concrete Military Bunker (-X, -Z)
     const buX = -22.0;
     const buZ = -24.0;
-    const buY = heightAt(buX, buZ, worldSeed);
+    const buY = heightAt(buX, buZ, worldSeed) - 0.15;
     buildings.push({
       archetype: 'bunker',
       x: buX, y: buY, z: buZ,
@@ -130,7 +130,7 @@ export function getChunkPlacement(chunkX, chunkZ, worldSeed, heightAt) {
           archetype = archOptions[Math.floor(prng() * archOptions.length)];
         }
 
-        const bY = heightAt(candX, candZ, worldSeed);
+        const bY = heightAt(candX, candZ, worldSeed) - 0.15;
         buildings.push({
           archetype,
           x: candX, y: bY, z: candZ,
@@ -288,10 +288,62 @@ export function getChunkPlacement(chunkX, chunkZ, worldSeed, heightAt) {
     }
   }
 
+  // =========================================================================
+  // 5. GENSHIN ANIME POST-APOC CITY ARCHITECTURE (Plots mapped by chunk)
+  // =========================================================================
+  const allCityPlots = [
+    [-11, -18, 6.2, 5.4, 2, 0], [11, -18, 6.4, 5.2, 3, 0],
+    [-11,  18, 6.0, 5.5, 3, 0], [11,  18, 6.5, 5.4, 2, 0],
+    [-18, -11, 5.4, 6.2, 2, Math.PI/2], [18, -11, 5.6, 6.4, 3, Math.PI/2],
+    [-18,  11, 5.5, 6.0, 3, Math.PI/2], [18,  11, 5.4, 6.2, 2, Math.PI/2],
+    [-21, -21, 7.0, 6.8, 3, 0.25], [21, -21, 7.2, 6.5, 3, -0.25],
+    [-21,  21, 6.8, 7.0, 3, -0.2], [21,  21, 7.0, 6.8, 2, 0.2]
+  ];
+
+  const allTowerPlots = [
+    [-12, -38, 8.5, 7.5, 6, 0.05], [12, -38, 9.0, 8.0, 7, -0.08],
+    [-12,  38, 8.5, 7.8, 5, -0.05], [12,  38, 9.2, 8.2, 6, 0.06],
+    [-38, -12, 7.8, 8.8, 6, 0.1],  [38, -12, 8.2, 8.5, 7, -0.1],
+    [-38,  12, 8.0, 8.4, 5, -0.05],[38,  12, 8.6, 8.0, 6, 0.08],
+    [-35, -35, 9.5, 9.5, 7, 0.4],  [35, -35, 9.2, 9.0, 6, -0.4],
+    [-35,  35, 9.0, 9.2, 6, -0.35],[35,  35, 9.6, 9.4, 8, 0.35]
+  ];
+
+  const allAnimeTrees = [
+    [-7.5, -10, 0], [7.5, -10, 0], [-7.5, 10, 1], [7.5, 10, 1],
+    [-10, -7.5, 1], [10, -7.5, 0], [-10, 7.5, 0], [10, 7.5, 1],
+    [-7.5, -26, 2], [7.5, -26, 0], [-7.5, 26, 0], [7.5, 26, 2],
+    [-26, -7.5, 1], [26, -7.5, 2], [-26, 7.5, 2], [26, 7.5, 1],
+    [-28, -28, 0], [28, -28, 1], [-28, 28, 1], [28, 28, 0],
+    [-48, -22, 2], [48, -22, 2], [-48, 22, 1], [48, 22, 0]
+  ];
+
+  const allTrams = [
+    [-2.2, 24, 0.08],
+    [24, -2.0, Math.PI / 2 - 0.12]
+  ];
+
+  const inChunk = (wx, wz) => {
+    const cx = Math.floor((wx + chunkSize * 0.5) / chunkSize);
+    const cz = Math.floor((wz + chunkSize * 0.5) / chunkSize);
+    return cx === chunkX && cz === chunkZ;
+  };
+
+  const animeHouses = allCityPlots.filter(p => inChunk(p[0], p[1]));
+  const animeTowers = allTowerPlots.filter(t => inChunk(t[0], t[1]));
+  const animeTrees = allAnimeTrees.filter(t => inChunk(t[0], t[1]));
+  const trams = allTrams.filter(t => inChunk(t[0], t[1]));
+  const hasSanctuary = (chunkX === 0 && chunkZ === 0);
+
   return {
     buildings,
     props,
     trees,
-    rubble
+    rubble,
+    animeHouses,
+    animeTowers,
+    animeTrees,
+    trams,
+    hasSanctuary
   };
 }

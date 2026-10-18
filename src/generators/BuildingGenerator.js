@@ -539,3 +539,155 @@ export function generate(seed = 1337, lodLevel = 0, options = {}) {
   validateAssetResult(result);
   return result;
 }
+
+// ====================================================================
+// GENSHIN ANIME CITY ARCHITECTURE HELPERS
+// ====================================================================
+
+export function makeBox(w, h, d, cx, cy, cz, taper = 1.0, tiltZ = 0, rotY = 0) {
+  const geo = new THREE.BoxGeometry(w, h, d);
+  const pos = geo.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    let vx = pos.getX(i), vy = pos.getY(i), vz = pos.getZ(i);
+    if (vy > 0 && taper !== 1.0) { vx *= taper; vz *= taper; }
+    pos.setXYZ(i, vx, vy, vz);
+  }
+  if (tiltZ !== 0) geo.rotateZ(tiltZ);
+  if (rotY !== 0) geo.rotateY(rotY);
+  geo.translate(cx, cy, cz);
+  return geo;
+}
+
+export function paintGeo(geo, hexTop, hexBottom, rand = Math.random, ySpan = 16) {
+  const g = geo.index ? geo.toNonIndexed() : geo.clone();
+  if (g.attributes.uv) g.deleteAttribute('uv');
+  const pos = g.attributes.position;
+  const colors = new Float32Array(pos.count * 3);
+  const cTop = new THREE.Color(hexTop);
+  const cBot = new THREE.Color(hexBottom);
+  const tmp = new THREE.Color();
+
+  for (let i = 0; i < pos.count; i++) {
+    const y = pos.getY(i);
+    const t = Math.max(0.0, Math.min(1.0, (y + 1.0) / ySpan));
+    tmp.copy(cBot).lerp(cTop, t * 0.8 + rand() * 0.2);
+    colors[i * 3] = tmp.r;
+    colors[i * 3 + 1] = tmp.g;
+    colors[i * 3 + 2] = tmp.b;
+  }
+  g.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  g.computeVertexNormals();
+  return g;
+}
+
+export function stripUV(geo) {
+  const g = geo.index ? geo.toNonIndexed() : geo.clone();
+  if (g.attributes.uv) g.deleteAttribute('uv');
+  g.computeVertexNormals();
+  return g;
+}
+
+export function addAnimeTimberHouse(bx, bz, w, d, stories, rotY, roofHexTop = 0xe76f51, roofHexBot = 0x9b2226, rand = Math.random, terrainY = 0) {
+  const stoneGeos = [];
+  const plasterGeos = [];
+  const timberGeos = [];
+  const roofGeos = [];
+  const foliageGeos = [];
+  const colliders = [];
+
+  const baseH = 0.6;
+  stoneGeos.push(paintGeo(makeBox(w + 0.4, baseH + 0.2, d + 0.4, bx, terrainY + baseH / 2 - 0.1, bz, 1.0, 0, rotY), 0xd6d3d1, 0x78716c, rand, 4));
+
+  const storyH = 3.1;
+  for (let s = 0; s < stories; s++) {
+    const sy = terrainY + baseH + s * storyH;
+    const sw = w * (s > 0 ? 1.06 : 1.0);
+    const sd = d * (s > 0 ? 1.06 : 1.0);
+
+    plasterGeos.push(paintGeo(makeBox(sw, storyH, sd, bx, sy + storyH / 2, bz, 1.0, 0, rotY), 0xfefae0, 0xddb892, rand, 14));
+    timberGeos.push(paintGeo(makeBox(sw + 0.18, 0.26, sd + 0.18, bx, sy + storyH, bz, 1.0, 0, rotY), 0x582f0e, 0x3b1f09, rand, 14));
+    timberGeos.push(paintGeo(makeBox(sw + 0.16, storyH, 0.24, bx, sy + storyH / 2, bz, 1.0, 0, rotY), 0x582f0e, 0x3b1f09, rand, 14));
+    timberGeos.push(paintGeo(makeBox(0.24, storyH, sd + 0.16, bx, sy + storyH / 2, bz, 1.0, 0, rotY), 0x582f0e, 0x3b1f09, rand, 14));
+
+    const winW = sw * 0.55;
+    timberGeos.push(paintGeo(makeBox(winW, 1.25, sd + 0.22, bx, sy + storyH * 0.55, bz, 1.0, 0, rotY), 0x2b2d42, 0x141622, rand, 10));
+  }
+
+  const roofY = terrainY + baseH + stories * storyH;
+  const roofH = 2.6;
+  const roof = new THREE.ConeGeometry(Math.max(w, d) * 0.82, roofH, 4);
+  roof.rotateY(Math.PI / 4 + rotY);
+  roof.scale(w / Math.max(w, d), 1, d / Math.max(w, d));
+  roof.translate(bx, roofY + roofH / 2, bz);
+  roofGeos.push(paintGeo(roof, roofHexTop, roofHexBot, rand, 18));
+
+  foliageGeos.push(paintGeo(makeBox(w * 0.65, 0.55, d * 0.65, bx + 0.4, roofY + 0.3, bz - 0.3, 0.75, 0.1, rotY), 0x95d5b2, 0x40916c, rand, 18));
+
+  // Exact rotated AABB extents for house (no invisible sidewalk collisions)
+  const hw = (w + 0.4) / 2;
+  const hd = (d + 0.4) / 2;
+  const cosR = Math.abs(Math.cos(rotY));
+  const sinR = Math.abs(Math.sin(rotY));
+  const extX = hw * cosR + hd * sinR;
+  const extZ = hw * sinR + hd * cosR;
+
+  colliders.push({
+    min: [bx - extX, terrainY - 1.0, bz - extZ],
+    max: [bx + extX, roofY + roofH + 0.5, bz + extZ]
+  });
+
+  return { stoneGeos, plasterGeos, timberGeos, roofGeos, foliageGeos, colliders };
+}
+
+export function addShatteredAnimeHighrise(bx, bz, w, d, stories, rotY, rand = Math.random, terrainY = 0) {
+  const stoneGeos = [];
+  const plasterGeos = [];
+  const timberGeos = [];
+  const foliageGeos = [];
+  const leylineGeos = [];
+  const floatingStoneGeos = [];
+  const colliders = [];
+
+  const floorH = 3.2;
+  const totalH = stories * floorH;
+
+  stoneGeos.push(paintGeo(makeBox(w + 1.4, 0.9, d + 1.4, bx, terrainY + 0.35, bz, 0.88, 0, rotY), 0x94a3b8, 0x475569, rand, 5));
+
+  for (let s = 0; s < stories; s++) {
+    const sy = terrainY + 0.6 + s * floorH;
+    const isShatteredTop = (s >= stories - 2);
+
+    if (isShatteredTop && rand() < 0.45) {
+      const floatChunk = makeBox(w * 0.55, floorH * 0.8, d * 0.55, bx + (rand() - 0.5) * 3.5, sy + 2.8 + rand() * 3.0, bz + (rand() - 0.5) * 3.5, 0.85, 0.25, rotY + 0.4);
+      floatingStoneGeos.push(paintGeo(floatChunk, 0xe2e8f0, 0x64748b, rand, 26));
+      continue;
+    }
+
+    plasterGeos.push(paintGeo(makeBox(w, floorH * 0.82, d, bx, sy + floorH * 0.42, bz, 1.0, 0, rotY), 0xe2e8f0, 0x94a3b8, rand, 26));
+    stoneGeos.push(paintGeo(makeBox(w + 0.35, 0.38, d + 0.35, bx, sy + floorH * 0.9, bz, 0.96, 0, rotY), 0x64748b, 0x334155, rand, 26));
+    timberGeos.push(paintGeo(makeBox(w + 0.12, floorH * 0.45, d * 0.72, bx, sy + floorH * 0.48, bz, 1.0, 0, rotY), 0x1e293b, 0x0f172a, rand, 26));
+  }
+
+  const shard = new THREE.ConeGeometry(1.1, 4.2, 5);
+  shard.rotateZ(0.28);
+  shard.rotateY(rotY);
+  shard.translate(bx, terrainY + 0.6 + totalH + 1.0, bz);
+  leylineGeos.push(stripUV(shard));
+
+  foliageGeos.push(paintGeo(makeBox(w * 0.8, 0.9, d * 0.8, bx, terrainY + 0.6 + totalH - 0.2, bz, 0.7, 0, rotY), 0x74c69d, 0x2d6a4f, rand, 28));
+
+  // Exact rotated AABB extents for highrise tower
+  const hw = (w + 1.4) / 2;
+  const hd = (d + 1.4) / 2;
+  const cosR = Math.abs(Math.cos(rotY));
+  const sinR = Math.abs(Math.sin(rotY));
+  const extX = hw * cosR + hd * sinR;
+  const extZ = hw * sinR + hd * cosR;
+
+  colliders.push({
+    min: [bx - extX, terrainY - 1.0, bz - extZ],
+    max: [bx + extX, terrainY + 0.6 + totalH + 6.0, bz + extZ]
+  });
+
+  return { stoneGeos, plasterGeos, timberGeos, foliageGeos, leylineGeos, floatingStoneGeos, colliders };
+}

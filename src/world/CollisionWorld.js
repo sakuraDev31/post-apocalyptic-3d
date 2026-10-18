@@ -35,6 +35,40 @@ export class CollisionWorld {
   }
 
   /**
+   * Returns the highest walkable surface Y at (x, z)
+   * Samples terrain height and any climbable rubble/plaza steps up to 0.45m step-height
+   * @param {number} x
+   * @param {number} y
+   * @param {number} z
+   * @param {Function} [heightFn]
+   * @returns {number}
+   */
+  getHighestSurfaceY(x, y, z, heightFn) {
+    const fn = heightFn || ((px, pz) => this.heightAt(px, pz));
+    let groundY = fn(x, z);
+
+    // Check colliders at (x, z) for step-up platforms / steps / rubble
+    const queryAABB = {
+      min: [x - 0.35, y - 1.2, z - 0.35],
+      max: [x + 0.35, y + 0.5, z + 0.35]
+    };
+    const colliders = this.queryColliders(queryAABB);
+    if (colliders && colliders.length > 0) {
+      for (let i = 0; i < colliders.length; i++) {
+        const c = colliders[i];
+        if (x >= c.min[0] && x <= c.max[0] && z >= c.min[2] && z <= c.max[2]) {
+          const topY = c.max[1];
+          // Climbable if within 0.45m step-up from current feet Y
+          if (topY <= y + 0.45 && topY > groundY) {
+            groundY = topY;
+          }
+        }
+      }
+    }
+    return groundY;
+  }
+
+  /**
    * Registers a list of world-space AABB colliders under a chunk key
    * @param {string} chunkKey - e.g. "0,0"
    * @param {Array<import('../core/Contracts.js').Collider>} colliders

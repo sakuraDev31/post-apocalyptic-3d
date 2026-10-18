@@ -269,3 +269,35 @@ export function generate(seed = 1337, lodLevel = 0, options = {}) {
 }
 
 export { createDentedDrum, createBarricade, createStreetlight };
+
+// ====================================================================
+// GENSHIN OVERGROWN ANIME TRAM
+// ====================================================================
+import { paintGeo, makeBox } from './BuildingGenerator.js';
+
+export function addOvergrownTram(cx, cz, rotY = 0, seed = 777, terrainY = 0) {
+  const rand = (() => {
+    let s = seed ^ (Math.floor(cx) * 53492791) ^ (Math.floor(cz) * 31492791);
+    return () => {
+      s = (s + 0x6D2B79F5) | 0;
+      let t = Math.imul(s ^ (s >>> 15), 1 | s);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  })();
+
+  const stoneGeos = [];
+  const plasterGeos = [];
+  const foliageGeos = [];
+
+  stoneGeos.push(paintGeo(makeBox(3.2, 2.4, 7.8, cx, terrainY + 1.35, cz, 0.96, 0.06, rotY), 0x52b788, 0x2d6a4f, rand, 4));
+  plasterGeos.push(paintGeo(makeBox(3.28, 0.95, 7.4, cx, terrainY + 1.75, cz, 1.0, 0.06, rotY), 0xf8f9fa, 0xcbd5e1, rand, 4));
+  foliageGeos.push(paintGeo(makeBox(2.8, 0.6, 4.5, cx, terrainY + 2.65, cz, 0.7, 0, rotY), 0x95d5b2, 0x40916c, rand, 5));
+
+  const collider = {
+    min: [cx - 2.5, terrainY - 1.0, cz - 4.5],
+    max: [cx + 2.5, terrainY + 3.5, cz + 4.5]
+  };
+
+  return { stoneGeos, plasterGeos, foliageGeos, collider };
+}

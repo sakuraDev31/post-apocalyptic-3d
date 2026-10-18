@@ -21,12 +21,12 @@ export class PlayerController {
     this.model = playerModel;
 
     // Dimensions
-    this.radius = 0.35;
-    this.standingHeight = 1.8;
-    this.crouchHeight = 1.1;
+    this.radius = options.radius ?? 0.35;
+    this.standingHeight = options.standingHeight ?? 1.8;
+    this.crouchHeight = options.crouchHeight ?? 1.1;
     this.height = this.standingHeight;
-    this.stepUpHeight = 0.35;
-    this.maxWalkableSlope = 40 * (Math.PI / 180); // 40 degrees in radians
+    this.stepUpHeight = options.stepUpHeight ?? 0.35;
+    this.maxWalkableSlope = options.maxWalkableSlope ?? (40 * (Math.PI / 180)); // 40 degrees in radians
 
     // Physics state
     this.position = new THREE.Vector3(0, 0, 0);
@@ -37,16 +37,16 @@ export class PlayerController {
     this.isSprinting = false;
 
     // Movement speeds
-    this.speedWalk = 2.2;
-    this.speedRun = 4.5;
-    this.speedSprint = 6.5;
-    this.speedCrouch = 1.4;
-    this.airControl = 0.6; // 60% of ground control
-    this.turnRate = 540 * (Math.PI / 180); // 540 deg/s in rad/s
+    this.speedWalk = options.speedWalk ?? 2.2;
+    this.speedRun = options.speedRun ?? 4.5;
+    this.speedSprint = options.speedSprint ?? 6.5;
+    this.speedCrouch = options.speedCrouch ?? 1.4;
+    this.airControl = options.airControl ?? 0.6; // 60% of ground control
+    this.turnRate = options.turnRate ?? (540 * (Math.PI / 180)); // 540 deg/s in rad/s
 
     // Jump & Gravity
-    this.jumpVelocity = 6.8; // Peak ~1.15m height with g=-20
-    this.gravity = -20.0;
+    this.jumpVelocity = options.jumpVelocity ?? 6.8; // Peak ~1.15m height with g=-20
+    this.gravity = options.gravity ?? -20.0;
     this.coyoteTimer = 0;
     this.jumpBufferTimer = 0;
     this.coyoteTimeMax = 0.12;
@@ -86,6 +86,17 @@ export class PlayerController {
       this.model.position.copy(this.position);
       this.model.rotation.y = this.yaw;
     }
+  }
+
+  /**
+   * Helper to sample highest ground/platform surface
+   */
+  _sampleGround(worldQuery, x, z, currentY) {
+    if (!worldQuery) return 0;
+    if (typeof worldQuery.getHighestSurfaceY === 'function') {
+      return worldQuery.getHighestSurfaceY(x, currentY !== undefined ? currentY : 0, z, (px, pz) => (worldQuery.heightAt ? worldQuery.heightAt(px, pz) : 0));
+    }
+    return worldQuery.heightAt ? worldQuery.heightAt(x, z) : 0;
   }
 
   /**
@@ -286,8 +297,8 @@ export class PlayerController {
     let candidateZ = this.position.z + dispZ;
 
     // 7. Ground height & Slope / Step-up test
-    const currentGroundY = worldQuery ? worldQuery.heightAt(this.position.x, this.position.z) : 0;
-    const candidateGroundY = worldQuery ? worldQuery.heightAt(candidateX, candidateZ) : 0;
+    const currentGroundY = this._sampleGround(worldQuery, this.position.x, this.position.z, this.position.y);
+    const candidateGroundY = this._sampleGround(worldQuery, candidateX, candidateZ, this.position.y);
     const stepDiff = candidateGroundY - currentGroundY;
 
     if (isMoving && targetMoveDist > 0.001) {
@@ -325,7 +336,7 @@ export class PlayerController {
     this.position.z = candidateZ;
 
     // 9. Vertical Integration & Gravity
-    const groundY = worldQuery ? worldQuery.heightAt(this.position.x, this.position.z) : 0;
+    const groundY = this._sampleGround(worldQuery, this.position.x, this.position.z, this.position.y);
     let justLanded = false;
 
     if (!this.isGrounded) {

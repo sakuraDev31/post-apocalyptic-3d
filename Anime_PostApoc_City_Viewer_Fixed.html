@@ -1,0 +1,766 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Genshin-Style Post-Apocalyptic Anime City — 3D Studio & ZIP Packager</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; -webkit-user-select: none; }
+    body, html { width: 100%; height: 100%; overflow: hidden; background: #1b2838; font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; color: #f8f9fa; }
+    #canvas-container { width: 100%; height: 100%; position: relative; touch-action: none; }
+
+    .hud-top {
+      position: absolute; top: 12px; left: 12px; right: 12px;
+      display: flex; justify-content: space-between; align-items: flex-start;
+      pointer-events: none; z-index: 10;
+    }
+    .genshin-card {
+      background: linear-gradient(145deg, rgba(28, 37, 54, 0.88), rgba(18, 24, 36, 0.92));
+      border: 1.5px solid rgba(233, 196, 106, 0.65);
+      border-radius: 12px; padding: 10px 16px;
+      backdrop-filter: blur(10px);
+      font-size: 12px; line-height: 1.55;
+      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45), inset 0 0 12px rgba(233, 196, 106, 0.12);
+    }
+    .card-title {
+      font-weight: 800; color: #f4d58d; font-size: 13px;
+      letter-spacing: 0.6px; margin-bottom: 3px;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .stat-val { color: #72efdd; font-family: monospace; font-weight: 700; }
+
+    .hud-bottom {
+      position: absolute; bottom: 14px; left: 10px; right: 10px;
+      display: flex; flex-wrap: wrap; gap: 8px; justify-content: center;
+      z-index: 10;
+    }
+    .btn {
+      background: rgba(25, 34, 50, 0.9);
+      color: #f1faee;
+      border: 1.5px solid rgba(233, 196, 106, 0.55);
+      border-radius: 20px;
+      padding: 9px 15px;
+      font-size: 12px; font-weight: 700;
+      cursor: pointer;
+      backdrop-filter: blur(6px);
+      transition: all 0.15s ease;
+      touch-action: manipulation;
+      box-shadow: 0 3px 10px rgba(0,0,0,0.35);
+    }
+    .btn:active, .btn.active {
+      background: #e9c46a;
+      color: #1b263b;
+      border-color: #fff;
+    }
+    .btn-zip {
+      background: linear-gradient(135deg, #f4a261, #e76f51);
+      border-color: #ffe8d6;
+      color: #fff;
+    }
+    .btn-glb {
+      background: linear-gradient(135deg, #2a9d8f, #1d6f65);
+      border-color: #a8dadc;
+      color: #fff;
+    }
+
+    #joystick-zone {
+      position: absolute; bottom: 95px; left: 24px;
+      width: 112px; height: 112px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(233, 196, 106, 0.15), rgba(20, 30, 48, 0.5));
+      border: 2px solid rgba(233, 196, 106, 0.6);
+      display: none; z-index: 15;
+      touch-action: none;
+    }
+    #joystick-knob {
+      position: absolute; top: 34px; left: 34px;
+      width: 40px; height: 40px;
+      border-radius: 50%;
+      background: radial-gradient(circle, #fff3b0, #e9c46a);
+      box-shadow: 0 0 14px rgba(233, 196, 106, 0.9);
+      pointer-events: none;
+    }
+  </style>
+  <!-- CRITICAL: importmap MUST come before ANY script tag so ES modules resolve -->
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js" defer></script>
+</head>
+<body>
+  <div id="canvas-container"></div>
+
+  <div class="hud-top">
+    <div class="genshin-card">
+      <div class="card-title">✦ CELESTIA RUINS: ANIME CITY STUDIO</div>
+      <div>FPS: <span id="fps" class="stat-val">60</span> | Tris: <span id="tris" class="stat-val">0</span> | Calls: <span id="calls" class="stat-val">0</span></div>
+      <div id="mode-text">Camera: 360° City Orbit (Tap Walk Mode to Explore)</div>
+    </div>
+  </div>
+
+  <div id="joystick-zone"><div id="joystick-knob"></div></div>
+
+  <div class="hud-bottom">
+    <button id="btn-mode" class="btn">🏃 Mode: Orbit Cam</button>
+    <button id="btn-time" class="btn">☀ Time: Golden Hour</button>
+    <button id="btn-grav" class="btn active">✨ Leyline Float: ON</button>
+    <button id="btn-seed" class="btn">🎲 Regenerate City</button>
+    <button id="btn-glb" class="btn btn-glb">⬇ Export City .GLB</button>
+    <button id="btn-zip" class="btn btn-zip">📦 Download Full Project .ZIP</button>
+  </div>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
+    import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
+
+    const container = document.getElementById('canvas-container');
+    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.18;
+    container.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x7ec8e3);
+    scene.fog = new THREE.FogExp2(0xc9e4de, 0.006);
+
+    const camera = new THREE.PerspectiveCamera(52, window.innerWidth / window.innerHeight, 0.5, 320);
+    camera.position.set(0, 26, 66);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.target.set(0, 8, 0);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.06;
+    controls.maxPolarAngle = Math.PI * 0.485;
+    controls.minDistance = 6;
+    controls.maxDistance = 150;
+
+    // Anime Cel-Shaded Lighting Setup
+    const hemiLight = new THREE.HemisphereLight(0xfff4d6, 0x4d7c5d, 1.2);
+    scene.add(hemiLight);
+
+    const sunLight = new THREE.DirectionalLight(0xffe5a3, 2.3);
+    sunLight.position.set(48, 72, 42);
+    sunLight.castShadow = true;
+    sunLight.shadow.mapSize.set(1024, 1024);
+    sunLight.shadow.camera.near = 5;
+    sunLight.shadow.camera.far = 190;
+    const d = 70;
+    sunLight.shadow.camera.left = -d;
+    sunLight.shadow.camera.right = d;
+    sunLight.shadow.camera.top = d;
+    sunLight.shadow.camera.bottom = -d;
+    sunLight.shadow.bias = -0.0008;
+    scene.add(sunLight);
+
+    const leylineLight = new THREE.PointLight(0x48cae4, 5.0, 45);
+    leylineLight.position.set(0, 18, 0);
+    scene.add(leylineLight);
+
+    // 4-Step Genshin Toon Gradient Ramp Texture
+    function createToonRamp() {
+      const data = new Uint8Array([
+        110, 115, 135, 255,
+        170, 175, 190, 255,
+        228, 230, 238, 255,
+        255, 255, 255, 255
+      ]);
+      const tex = new THREE.DataTexture(data, 4, 1, THREE.RGBAFormat);
+      tex.minFilter = THREE.NearestFilter;
+      tex.magFilter = THREE.NearestFilter;
+      tex.needsUpdate = true;
+      return tex;
+    }
+
+    const toonRamp = createToonRamp();
+
+    const mats = {
+      terrain: new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: toonRamp }),
+      plaster: new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: toonRamp }),
+      roofTile: new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: toonRamp }),
+      stone: new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: toonRamp }),
+      timber: new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: toonRamp }),
+      foliage: new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: toonRamp }),
+      leyline: new THREE.MeshStandardMaterial({
+        color: 0x56cfe1, emissive: 0x00b4d8, emissiveIntensity: 2.2, roughness: 0.15, metalness: 0.2
+      }),
+      goldRing: new THREE.MeshStandardMaterial({
+        color: 0xffd166, emissive: 0xf4a261, emissiveIntensity: 1.4, roughness: 0.25, metalness: 0.85
+      })
+    };
+
+    function mulberry32(a) {
+      return function() {
+        let t = a += 0x6D2B79F5;
+        t = Math.imul(t ^ t >>> 15, t | 1);
+        t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+        return ((t ^ t >>> 14) >>> 0) / 4294967296;
+      };
+    }
+
+    function hash2D(x, z, seed) {
+      const h = Math.sin(x * 127.1 + z * 311.7 + seed * 74.7) * 43758.5453;
+      return h - Math.floor(h);
+    }
+
+    function smoothNoise(x, z, seed) {
+      const ix = Math.floor(x), iz = Math.floor(z);
+      const fx = x - ix, fz = z - iz;
+      const u = fx * fx * (3 - 2 * fx);
+      const v = fz * fz * (3 - 2 * fz);
+      return (
+        hash2D(ix, iz, seed) * (1 - u) * (1 - v) +
+        hash2D(ix + 1, iz, seed) * u * (1 - v) +
+        hash2D(ix, iz + 1, seed) * (1 - u) * v +
+        hash2D(ix + 1, iz + 1, seed) * u * v
+      );
+    }
+
+    function getCityTerrainHeight(x, z, seed) {
+      const r = Math.hypot(x, z);
+      if (r < 52) {
+        if (r < 11) return 1.2;
+        if (r < 13.5) return 1.2 * (1 - (r - 11) / 2.5);
+        return 0.0;
+      }
+      const hillFactor = Math.pow((r - 52) / 38, 1.45);
+      const n = smoothNoise(x * 0.045, z * 0.045, seed) * 14.0 + smoothNoise(x * 0.1, z * 0.1, seed + 7) * 4.0;
+      return hillFactor * n;
+    }
+
+    // Strips UVs so BufferGeometryUtils.mergeGeometries never fails on attribute mismatches
+    function paintGeo(geo, hexTop, hexBottom, rand, ySpan = 16) {
+      const g = geo.index ? geo.toNonIndexed() : geo.clone();
+      if (g.attributes.uv) g.deleteAttribute('uv');
+      const pos = g.attributes.position;
+      const colors = new Float32Array(pos.count * 3);
+      const cTop = new THREE.Color(hexTop);
+      const cBot = new THREE.Color(hexBottom);
+      const tmp = new THREE.Color();
+
+      for (let i = 0; i < pos.count; i++) {
+        const y = pos.getY(i);
+        const t = Math.max(0.0, Math.min(1.0, (y + 1.0) / ySpan));
+        tmp.copy(cBot).lerp(cTop, t * 0.8 + rand() * 0.2);
+        colors[i * 3] = tmp.r;
+        colors[i * 3 + 1] = tmp.g;
+        colors[i * 3 + 2] = tmp.b;
+      }
+      g.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+      g.computeVertexNormals();
+      return g;
+    }
+
+    function stripUV(geo) {
+      const g = geo.index ? geo.toNonIndexed() : geo.clone();
+      if (g.attributes.uv) g.deleteAttribute('uv');
+      g.computeVertexNormals();
+      return g;
+    }
+
+    function makeBox(w, h, d, cx, cy, cz, taper = 1.0, tiltZ = 0, rotY = 0) {
+      const geo = new THREE.BoxGeometry(w, h, d);
+      const pos = geo.attributes.position;
+      for (let i = 0; i < pos.count; i++) {
+        let vx = pos.getX(i), vy = pos.getY(i), vz = pos.getZ(i);
+        if (vy > 0 && taper !== 1.0) { vx *= taper; vz *= taper; }
+        pos.setXYZ(i, vx, vy, vz);
+      }
+      if (tiltZ !== 0) geo.rotateZ(tiltZ);
+      if (rotY !== 0) geo.rotateY(rotY);
+      geo.translate(cx, cy, cz);
+      return geo;
+    }
+
+    let cityRoot = null;
+    let floatingLayer = null;
+    let currentSeed = 777;
+
+    function buildAnimePostApocCity(seed) {
+      if (cityRoot) scene.remove(cityRoot);
+      const rand = mulberry32(seed);
+
+      cityRoot = new THREE.Group();
+      cityRoot.name = "Genshin_Anime_PostApoc_City";
+
+      floatingLayer = new THREE.Group();
+      floatingLayer.name = "Celestial_Antigravity_Layer";
+
+      const plasterGeos = [];
+      const roofGeos = [];
+      const stoneGeos = [];
+      const timberGeos = [];
+      const foliageGeos = [];
+      const leylineGeos = [];
+      const goldGeos = [];
+      const floatingStoneGeos = [];
+
+      // 1. Stylized Anime Terrain, Cobblestone Plaza & Avenue Grid
+      const tGeo = new THREE.PlaneGeometry(160, 160, 84, 84);
+      tGeo.rotateX(-Math.PI / 2);
+      const tPos = tGeo.attributes.position;
+      for (let i = 0; i < tPos.count; i++) {
+        tPos.setY(i, getCityTerrainHeight(tPos.getX(i), tPos.getZ(i), seed));
+      }
+
+      const nonIdxT = stripUV(tGeo);
+      const ntPos = nonIdxT.attributes.position;
+      const tCols = new Float32Array(ntPos.count * 3);
+
+      const cGrassLush = new THREE.Color(0x52b788);
+      const cGrassSun  = new THREE.Color(0x95d5b2);
+      const cPlazaWarm = new THREE.Color(0xe6ccb2);
+      const cRoadSlate = new THREE.Color(0x414859);
+      const cCrosswalk = new THREE.Color(0xf1faee);
+      const cSidewalk  = new THREE.Color(0xcbd5e1);
+      const cMossPatch = new THREE.Color(0x74c69d);
+      const tmp = new THREE.Color();
+
+      for (let i = 0; i < ntPos.count; i++) {
+        const vx = ntPos.getX(i), vy = ntPos.getY(i), vz = ntPos.getZ(i);
+        const r = Math.hypot(vx, vz);
+        const onMainAve = (Math.abs(vx) < 4.8 || Math.abs(vz) < 4.8) && r < 50;
+        const onRingRoad = Math.abs(r - 32.0) < 3.6;
+        const onSidewalk = ((Math.abs(vx) < 6.8 || Math.abs(vz) < 6.8) && r < 50) || Math.abs(r - 32.0) < 5.2;
+
+        if (r < 13.5) {
+          tmp.copy(cPlazaWarm).lerp(cMossPatch, (rand() < 0.22) ? 0.45 : 0.05);
+        } else if (onMainAve || onRingRoad) {
+          const isCrosswalk = (Math.abs(Math.abs(vx) - 16) < 1.8 && Math.abs(vz) < 4.2 && Math.sin(vz * 3.5) > 0) ||
+                              (Math.abs(Math.abs(vz) - 16) < 1.8 && Math.abs(vx) < 4.2 && Math.sin(vx * 3.5) > 0);
+          if (rand() < 0.16) {
+            tmp.copy(cMossPatch);
+          } else if (isCrosswalk) {
+            tmp.copy(cCrosswalk);
+          } else {
+            tmp.copy(cRoadSlate);
+          }
+        } else if (onSidewalk) {
+          tmp.copy(cSidewalk).lerp(cMossPatch, rand() * 0.25);
+        } else {
+          const nBlend = smoothNoise(vx * 0.08, vz * 0.08, seed);
+          tmp.copy(cGrassLush).lerp(cGrassSun, nBlend * 0.75 + (vy > 3 ? 0.2 : 0));
+        }
+        tCols[i * 3] = tmp.r;
+        tCols[i * 3 + 1] = tmp.g;
+        tCols[i * 3 + 2] = tmp.b;
+      }
+      nonIdxT.setAttribute('color', new THREE.BufferAttribute(tCols, 3));
+      nonIdxT.computeVertexNormals();
+      const terrainMesh = new THREE.Mesh(nonIdxT, mats.terrain);
+      terrainMesh.receiveShadow = true;
+      cityRoot.add(terrainMesh);
+
+      // 2. Central Celestial Sanctuary & Floating Leyline Nail
+      for (let s = 0; s < 3; s++) {
+        const cyl = new THREE.CylinderGeometry(11.5 - s * 1.8, 12.2 - s * 1.8, 0.7, 12);
+        cyl.translate(0, 1.2 + s * 0.7, 0);
+        stoneGeos.push(paintGeo(cyl, 0xe5e5e5, 0x9ca3af, rand, 6));
+      }
+
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2 + 0.39;
+        const px = Math.cos(a) * 9.2;
+        const pz = Math.sin(a) * 9.2;
+        const brokenH = (i % 3 === 0) ? 3.4 : 5.8;
+        const col = new THREE.CylinderGeometry(0.48, 0.56, brokenH, 8);
+        col.translate(px, 2.8 + brokenH / 2, pz);
+        stoneGeos.push(paintGeo(col, 0xf8f9fa, 0xa8a29e, rand, 10));
+
+        if (i % 2 === 0) {
+          foliageGeos.push(paintGeo(makeBox(1.3, 0.6, 1.3, px, 2.8 + brokenH + 0.2, pz, 0.7), 0x80ed99, 0x38a3a5, rand, 12));
+        }
+      }
+
+      const nailCore = new THREE.CylinderGeometry(0.2, 1.35, 11.5, 6);
+      nailCore.translate(0, 16.5, 0);
+      leylineGeos.push(stripUV(nailCore));
+
+      const ring1 = new THREE.TorusGeometry(4.2, 0.16, 8, 28);
+      ring1.rotateX(Math.PI / 2.4);
+      ring1.translate(0, 16.5, 0);
+      goldGeos.push(stripUV(ring1));
+
+      const ring2 = new THREE.TorusGeometry(5.6, 0.14, 8, 28);
+      ring2.rotateX(-Math.PI / 3);
+      ring2.rotateY(0.5);
+      ring2.translate(0, 16.5, 0);
+      goldGeos.push(stripUV(ring2));
+
+      // 3. Dense Anime City Blocks (Timber-Plaster Houses + Neo-Towers)
+      function addAnimeTimberHouse(bx, bz, w, d, stories, rotY, roofHexTop, roofHexBot) {
+        const baseH = 0.6;
+        stoneGeos.push(paintGeo(makeBox(w + 0.4, baseH + 0.2, d + 0.4, bx, baseH / 2 - 0.1, bz, 1.0, 0, rotY), 0xd6d3d1, 0x78716c, rand, 4));
+
+        const storyH = 3.1;
+        for (let s = 0; s < stories; s++) {
+          const sy = baseH + s * storyH;
+          const sw = w * (s > 0 ? 1.06 : 1.0);
+          const sd = d * (s > 0 ? 1.06 : 1.0);
+
+          plasterGeos.push(paintGeo(makeBox(sw, storyH, sd, bx, sy + storyH / 2, bz, 1.0, 0, rotY), 0xfefae0, 0xddb892, rand, 14));
+          timberGeos.push(paintGeo(makeBox(sw + 0.18, 0.26, sd + 0.18, bx, sy + storyH, bz, 1.0, 0, rotY), 0x582f0e, 0x3b1f09, rand, 14));
+          timberGeos.push(paintGeo(makeBox(sw + 0.16, storyH, 0.24, bx, sy + storyH / 2, bz, 1.0, 0, rotY), 0x582f0e, 0x3b1f09, rand, 14));
+          timberGeos.push(paintGeo(makeBox(0.24, storyH, sd + 0.16, bx, sy + storyH / 2, bz, 1.0, 0, rotY), 0x582f0e, 0x3b1f09, rand, 14));
+
+          const winW = sw * 0.55;
+          timberGeos.push(paintGeo(makeBox(winW, 1.25, sd + 0.22, bx, sy + storyH * 0.55, bz, 1.0, 0, rotY), 0x2b2d42, 0x141622, rand, 10));
+        }
+
+        const roofY = baseH + stories * storyH;
+        const roofH = 2.6;
+        const roof = new THREE.ConeGeometry(Math.max(w, d) * 0.82, roofH, 4);
+        roof.rotateY(Math.PI / 4 + rotY);
+        roof.scale(w / Math.max(w, d), 1, d / Math.max(w, d));
+        roof.translate(bx, roofY + roofH / 2, bz);
+        roofGeos.push(paintGeo(roof, roofHexTop, roofHexBot, rand, 18));
+
+        foliageGeos.push(paintGeo(makeBox(w * 0.65, 0.55, d * 0.65, bx + 0.4, roofY + 0.3, bz - 0.3, 0.75, 0.1, rotY), 0x95d5b2, 0x40916c, rand, 18));
+      }
+
+      function addShatteredAnimeHighrise(bx, bz, w, d, stories, rotY) {
+        const floorH = 3.2;
+        const totalH = stories * floorH;
+
+        stoneGeos.push(paintGeo(makeBox(w + 1.4, 0.9, d + 1.4, bx, 0.35, bz, 0.88, 0, rotY), 0x94a3b8, 0x475569, rand, 5));
+
+        for (let s = 0; s < stories; s++) {
+          const sy = 0.6 + s * floorH;
+          const isShatteredTop = (s >= stories - 2);
+
+          if (isShatteredTop && rand() < 0.45) {
+            const floatChunk = makeBox(w * 0.55, floorH * 0.8, d * 0.55, bx + (rand() - 0.5) * 3.5, sy + 2.8 + rand() * 3.0, bz + (rand() - 0.5) * 3.5, 0.85, 0.25, rotY + 0.4);
+            floatingStoneGeos.push(paintGeo(floatChunk, 0xe2e8f0, 0x64748b, rand, 26));
+            continue;
+          }
+
+          plasterGeos.push(paintGeo(makeBox(w, floorH * 0.82, d, bx, sy + floorH * 0.42, bz, 1.0, 0, rotY), 0xe2e8f0, 0x94a3b8, rand, 26));
+          stoneGeos.push(paintGeo(makeBox(w + 0.35, 0.38, d + 0.35, bx, sy + floorH * 0.9, bz, 0.96, 0, rotY), 0x64748b, 0x334155, rand, 26));
+          timberGeos.push(paintGeo(makeBox(w + 0.12, floorH * 0.45, d * 0.72, bx, sy + floorH * 0.48, bz, 1.0, 0, rotY), 0x1e293b, 0x0f172a, rand, 26));
+        }
+
+        const shard = new THREE.ConeGeometry(1.1, 4.2, 5);
+        shard.rotateZ(0.28);
+        shard.rotateY(rotY);
+        shard.translate(bx, 0.6 + totalH + 1.0, bz);
+        leylineGeos.push(stripUV(shard));
+
+        foliageGeos.push(paintGeo(makeBox(w * 0.8, 0.9, d * 0.8, bx, 0.6 + totalH - 0.2, bz, 0.7, 0, rotY), 0x74c69d, 0x2d6a4f, rand, 28));
+      }
+
+      const roofPalettes = [
+        [0xe76f51, 0x9b2226],
+        [0x457b9d, 0x1d3557],
+        [0x2a9d8f, 0x1b4332],
+        [0xe9c46a, 0xb5838d]
+      ];
+
+      const cityPlots = [
+        [-11, -18, 6.2, 5.4, 2, 0], [11, -18, 6.4, 5.2, 3, 0],
+        [-11,  18, 6.0, 5.5, 3, 0], [11,  18, 6.5, 5.4, 2, 0],
+        [-18, -11, 5.4, 6.2, 2, Math.PI/2], [18, -11, 5.6, 6.4, 3, Math.PI/2],
+        [-18,  11, 5.5, 6.0, 3, Math.PI/2], [18,  11, 5.4, 6.2, 2, Math.PI/2],
+        [-21, -21, 7.0, 6.8, 3, 0.25], [21, -21, 7.2, 6.5, 3, -0.25],
+        [-21,  21, 6.8, 7.0, 3, -0.2], [21,  21, 7.0, 6.8, 2, 0.2],
+      ];
+
+      cityPlots.forEach((p, idx) => {
+        const pal = roofPalettes[idx % roofPalettes.length];
+        addAnimeTimberHouse(p[0], p[1], p[2], p[3], p[4], p[5], pal[0], pal[1]);
+      });
+
+      const towerPlots = [
+        [-12, -38, 8.5, 7.5, 6, 0.05], [12, -38, 9.0, 8.0, 7, -0.08],
+        [-12,  38, 8.5, 7.8, 5, -0.05], [12,  38, 9.2, 8.2, 6, 0.06],
+        [-38, -12, 7.8, 8.8, 6, 0.1],  [38, -12, 8.2, 8.5, 7, -0.1],
+        [-38,  12, 8.0, 8.4, 5, -0.05],[38,  12, 8.6, 8.0, 6, 0.08],
+        [-35, -35, 9.5, 9.5, 7, 0.4],  [35, -35, 9.2, 9.0, 6, -0.4],
+        [-35,  35, 9.0, 9.2, 6, -0.35],[35,  35, 9.6, 9.4, 8, 0.35]
+      ];
+
+      towerPlots.forEach(t => addShatteredAnimeHighrise(t[0], t[1], t[2], t[3], t[4], t[5]));
+
+      // 4. Sakura & Golden Ginkgo Trees + Anime Street Props
+      function addStylizedAnimeTree(tx, tz, typeIdx) {
+        const ty = getCityTerrainHeight(tx, tz, seed);
+        const trunk = new THREE.CylinderGeometry(0.22, 0.48, 3.4, 7);
+        trunk.rotateZ((rand() - 0.5) * 0.16);
+        trunk.translate(tx, ty + 1.6, tz);
+        timberGeos.push(paintGeo(trunk, 0x5c3d2e, 0x2d1e17, rand, 6));
+
+        let cTop = 0xffb3c6, cBot = 0xfb6f92;
+        if (typeIdx === 1) { cTop = 0xffd166; cBot = 0xf4a261; }
+        else if (typeIdx === 2) { cTop = 0x80ed99; cBot = 0x2ec4b6; }
+
+        const puffs = [
+          [0, 3.8, 0, 1.85], [-1.1, 3.4, 0.6, 1.35], [1.1, 3.5, -0.5, 1.4],
+          [0.4, 4.4, 0.8, 1.3], [-0.6, 4.2, -0.8, 1.25]
+        ];
+        for (const pf of puffs) {
+          const puff = new THREE.IcosahedronGeometry(pf[3], 1);
+          puff.scale(1.15, 0.82, 1.15);
+          puff.translate(tx + pf[0], ty + pf[1], tz + pf[2]);
+          foliageGeos.push(paintGeo(puff, cTop, cBot, rand, 8));
+        }
+      }
+
+      const treeCoords = [
+        [-7.5, -10, 0], [7.5, -10, 0], [-7.5, 10, 1], [7.5, 10, 1],
+        [-10, -7.5, 1], [10, -7.5, 0], [-10, 7.5, 0], [10, 7.5, 1],
+        [-7.5, -26, 2], [7.5, -26, 0], [-7.5, 26, 0], [7.5, 26, 2],
+        [-26, -7.5, 1], [26, -7.5, 2], [-26, 7.5, 2], [26, 7.5, 1],
+        [-28, -28, 0], [28, -28, 1], [-28, 28, 1], [28, 28, 0],
+        [-48, -22, 2], [48, -22, 2], [-48, 22, 1], [48, 22, 0]
+      ];
+      treeCoords.forEach(tc => addStylizedAnimeTree(tc[0], tc[1], tc[2]));
+
+      function addOvergrownTram(cx, cz, rotY) {
+        stoneGeos.push(paintGeo(makeBox(3.2, 2.4, 7.8, cx, 1.35, cz, 0.96, 0.06, rotY), 0x52b788, 0x2d6a4f, rand, 4));
+        plasterGeos.push(paintGeo(makeBox(3.28, 0.95, 7.4, cx, 1.75, cz, 1.0, 0.06, rotY), 0xf8f9fa, 0xcbd5e1, rand, 4));
+        foliageGeos.push(paintGeo(makeBox(2.8, 0.6, 4.5, cx, 2.65, cz, 0.7, 0, rotY), 0x95d5b2, 0x40916c, rand, 5));
+      }
+      addOvergrownTram(-2.2, 24, 0.08);
+      addOvergrownTram(24, -2.0, Math.PI / 2 - 0.12);
+
+      for (let i = 0; i < 36; i++) {
+        const ang = (i / 36) * Math.PI * 2;
+        const rad = 14 + rand() * 34;
+        const h = 11 + rand() * 20;
+        const fx = Math.cos(ang) * rad;
+        const fz = Math.sin(ang) * rad;
+
+        const island = new THREE.ConeGeometry(0.9 + rand() * 1.4, 1.8 + rand() * 1.6, 6);
+        island.rotateX(Math.PI);
+        island.translate(fx, h, fz);
+        floatingStoneGeos.push(paintGeo(island, 0x95d5b2, 0x57534e, rand, 28));
+
+        if (i % 3 === 0) {
+          const crys = new THREE.OctahedronGeometry(0.45, 0);
+          crys.scale(0.8, 1.8, 0.8);
+          crys.translate(fx, h + 1.3, fz);
+          leylineGeos.push(stripUV(crys));
+        }
+      }
+
+      const mergeAdd = (arr, mat, parent, name) => {
+        if (!arr.length) return;
+        const merged = BufferGeometryUtils.mergeGeometries(arr, false);
+        const mesh = new THREE.Mesh(merged, mat);
+        mesh.name = name;
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        parent.add(mesh);
+      };
+
+      mergeAdd(plasterGeos, mats.plaster, cityRoot, "Anime_City_Plaster_Walls");
+      mergeAdd(roofGeos, mats.roofTile, cityRoot, "Anime_City_Tiled_Roofs");
+      mergeAdd(stoneGeos, mats.stone, cityRoot, "Anime_City_Stone_Foundations");
+      mergeAdd(timberGeos, mats.timber, cityRoot, "Anime_City_Timber_Frames");
+      mergeAdd(foliageGeos, mats.foliage, cityRoot, "Anime_Sakura_Ginkgo_Foliage");
+      mergeAdd(leylineGeos, mats.leyline, floatingLayer, "Celestial_Leyline_Crystals");
+      mergeAdd(goldGeos, mats.goldRing, floatingLayer, "Celestial_Golden_Rings");
+      mergeAdd(floatingStoneGeos, mats.stone, floatingLayer, "Antigravity_Sky_Islands");
+
+      cityRoot.add(floatingLayer);
+      scene.add(cityRoot);
+    }
+
+    buildAnimePostApocCity(currentSeed);
+
+    // Walk & Orbit Controls
+    let walkMode = false, yaw = 0, pitch = 0;
+    const moveVec = { x: 0, y: 0 };
+    const keys = {};
+    const joyZone = document.getElementById('joystick-zone');
+    const joyKnob = document.getElementById('joystick-knob');
+    const modeText = document.getElementById('mode-text');
+
+    document.getElementById('btn-mode').addEventListener('click', (e) => {
+      walkMode = !walkMode;
+      controls.enabled = !walkMode;
+      joyZone.style.display = walkMode ? 'block' : 'none';
+      e.target.textContent = walkMode ? '🚶 Mode: Walk City' : '🏃 Mode: Orbit Cam';
+      e.target.classList.toggle('active', walkMode);
+      modeText.textContent = walkMode ? 'Walk Mode: Left Stick Move • Drag Right to Look' : 'Camera: 360° City Orbit';
+      if (walkMode) {
+        camera.position.set(0, 2.6, 30);
+        yaw = 0; pitch = 0.05;
+      } else {
+        camera.position.set(0, 26, 66);
+        controls.target.set(0, 8, 0);
+      }
+    });
+
+    let joyId = null;
+    joyZone.addEventListener('touchstart', (e) => {
+      e.stopPropagation();
+      const t = e.changedTouches[0];
+      joyId = t.identifier;
+      updateJoy(t);
+    }, { passive: false });
+    joyZone.addEventListener('touchmove', (e) => {
+      e.stopPropagation();
+      for (const t of e.changedTouches) if (t.identifier === joyId) updateJoy(t);
+    }, { passive: false });
+    const endJoy = () => { joyId = null; moveVec.x = 0; moveVec.y = 0; joyKnob.style.transform = 'translate(0px,0px)'; };
+    joyZone.addEventListener('touchend', endJoy);
+    joyZone.addEventListener('touchcancel', endJoy);
+
+    function updateJoy(t) {
+      const r = joyZone.getBoundingClientRect();
+      let dx = t.clientX - (r.left + r.width / 2);
+      let dy = t.clientY - (r.top + r.height / 2);
+      const max = 38, d = Math.hypot(dx, dy);
+      if (d > max) { dx = (dx / d) * max; dy = (dy / d) * max; }
+      joyKnob.style.transform = `translate(${dx}px, ${dy}px)`;
+      moveVec.x = dx / max; moveVec.y = -dy / max;
+    }
+
+    let lookId = null, lx = 0, ly = 0;
+    container.addEventListener('touchstart', (e) => {
+      if (!walkMode) return;
+      const t = e.changedTouches[0];
+      lookId = t.identifier; lx = t.clientX; ly = t.clientY;
+    }, { passive: true });
+    container.addEventListener('touchmove', (e) => {
+      if (!walkMode) return;
+      for (const t of e.changedTouches) {
+        if (t.identifier === lookId) {
+          yaw -= (t.clientX - lx) * 0.005;
+          pitch = Math.max(-1.1, Math.min(1.1, pitch - (t.clientY - ly) * 0.005));
+          lx = t.clientX; ly = t.clientY;
+        }
+      }
+    }, { passive: true });
+
+    window.addEventListener('keydown', (e) => keys[e.code] = true);
+    window.addEventListener('keyup', (e) => keys[e.code] = false);
+
+    let timeIdx = 0, floatOn = true;
+    document.getElementById('btn-time').addEventListener('click', (e) => {
+      timeIdx = (timeIdx + 1) % 3;
+      if (timeIdx === 0) {
+        scene.background.setHex(0x7ec8e3); scene.fog.color.setHex(0xc9e4de);
+        sunLight.color.setHex(0xffe5a3); e.target.textContent = '☀ Time: Golden Hour';
+      } else if (timeIdx === 1) {
+        scene.background.setHex(0xf4a261); scene.fog.color.setHex(0xe76f51);
+        sunLight.color.setHex(0xffb703); e.target.textContent = '🌇 Time: Anime Sunset';
+      } else {
+        scene.background.setHex(0x1d3557); scene.fog.color.setHex(0x1d3557);
+        sunLight.color.setHex(0x90e0ef); e.target.textContent = '🌙 Time: Starlit Night';
+      }
+    });
+
+    document.getElementById('btn-grav').addEventListener('click', (e) => {
+      floatOn = !floatOn;
+      e.target.textContent = `✨ Leyline Float: ${floatOn ? 'ON' : 'OFF'}`;
+      e.target.classList.toggle('active', floatOn);
+    });
+
+    document.getElementById('btn-seed').addEventListener('click', () => {
+      currentSeed = Math.floor(Math.random() * 99999);
+      buildAnimePostApocCity(currentSeed);
+    });
+
+    document.getElementById('btn-glb').addEventListener('click', (e) => {
+      const btn = e.target;
+      btn.textContent = 'Packing .GLB...';
+      const exporter = new GLTFExporter();
+      exporter.parse(cityRoot, (buffer) => {
+        const blob = new Blob([buffer], { type: 'model/gltf-binary' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `Genshin_Anime_City_Seed${currentSeed}.glb`;
+        a.click();
+        btn.textContent = '⬇ Export City .GLB';
+      }, (err) => console.error(err), { binary: true });
+    });
+
+    document.getElementById('btn-zip').addEventListener('click', async (e) => {
+      const btn = e.target;
+      btn.textContent = '⏳ Building ZIP...';
+      const exporter = new GLTFExporter();
+      const exportBinaryGLB = (obj) => new Promise((resolve, reject) => {
+        exporter.parse(obj, (buf) => resolve(buf), reject, { binary: true });
+      });
+
+      try {
+        const fullCityGLB = await exportBinaryGLB(cityRoot);
+        const zip = new window.JSZip();
+        zip.file(`assets/Genshin_Anime_PostApoc_City_Seed${currentSeed}.glb`, fullCityGLB);
+        zip.file("Anime_City_3D_Viewer.html", document.documentElement.outerHTML);
+        const content = await zip.generateAsync({ type: 'blob' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(content);
+        a.download = `Genshin_Anime_PostApoc_City_Pack.zip`;
+        a.click();
+        btn.textContent = '✅ Downloaded ZIP!';
+        setTimeout(() => { btn.textContent = '📦 Download Full Project .ZIP'; }, 3000);
+      } catch (err) {
+        console.error(err);
+        btn.textContent = '❌ ZIP Error';
+      }
+    });
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    const fpsEl = document.getElementById('fps');
+    const trisEl = document.getElementById('tris');
+    const callsEl = document.getElementById('calls');
+    let frames = 0, lastPerf = performance.now(), prevTime = performance.now();
+
+    function animate(now) {
+      requestAnimationFrame(animate);
+      const dt = Math.min(0.1, (now - prevTime) / 1000);
+      prevTime = now;
+      frames++;
+
+      if (now >= lastPerf + 500) {
+        fpsEl.textContent = Math.round((frames * 1000) / (now - lastPerf));
+        trisEl.textContent = renderer.info.render.triangles.toLocaleString();
+        callsEl.textContent = renderer.info.render.calls;
+        frames = 0; lastPerf = now;
+      }
+
+      if (floatOn && floatingLayer) {
+        const t = now * 0.0014;
+        floatingLayer.position.y = Math.sin(t) * 0.65;
+        floatingLayer.rotation.y = t * 0.09;
+      }
+
+      if (walkMode) {
+        const fwd = (keys['KeyW'] || keys['ArrowUp'] ? 1 : 0) - (keys['KeyS'] || keys['ArrowDown'] ? 1 : 0) + moveVec.y;
+        const str = (keys['KeyD'] || keys['ArrowRight'] ? 1 : 0) - (keys['KeyA'] || keys['ArrowLeft'] ? 1 : 0) + moveVec.x;
+        const speed = 13.0 * dt;
+        camera.position.x += (-Math.sin(yaw) * fwd + Math.cos(yaw) * str) * speed;
+        camera.position.z += (-Math.cos(yaw) * fwd - Math.sin(yaw) * str) * speed;
+        camera.position.y = getCityTerrainHeight(camera.position.x, camera.position.z, currentSeed) + 2.3;
+        camera.lookAt(
+          camera.position.x - Math.sin(yaw) * Math.cos(pitch),
+          camera.position.y + Math.sin(pitch),
+          camera.position.z - Math.cos(yaw) * Math.cos(pitch)
+        );
+      } else {
+        controls.update();
+      }
+
+      renderer.render(scene, camera);
+    }
+    requestAnimationFrame(animate);
+  </script>
+</body>
+</html>

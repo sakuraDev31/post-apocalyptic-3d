@@ -11,8 +11,11 @@
  */
 
 import * as THREE from 'three';
+import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
 import { generateTerrainRaw, heightAt } from '../generators/TerrainGenerator.js';
-import { generate as generateBuilding } from '../generators/BuildingGenerator.js';
+import { generate as generateBuilding, addAnimeTimberHouse, addShatteredAnimeHighrise, paintGeo, makeBox, stripUV } from '../generators/BuildingGenerator.js';
+import { addStylizedAnimeTree } from '../generators/TreeGenerator.js';
+import { addOvergrownTram } from '../generators/PropsGenerator.js';
 import { getChunkPlacement } from './Placement.js';
 import { MATERIAL_KEYS, buildSceneGroup } from '../core/AssetContract.js';
 
@@ -43,6 +46,9 @@ export class WorldStreamer {
 
     // Active buildings list for minimap
     this.activeBuildings = [];
+
+    // Floating celestial layers for idle bob/rot animation
+    this.floatingLayers = [];
 
     // Road points for minimap
     this.roadSplinePoints = [];
@@ -184,7 +190,9 @@ export class WorldStreamer {
     terrainGeom.setIndex(new THREE.BufferAttribute(rawTerrain.indices, 1));
     terrainGeom.computeBoundingBox();
 
-    const terrainMat = this.materialBank.get(MATERIAL_KEYS.ASPHALT);
+    const terrainMat = this.materialBank.getToonMaterial
+      ? this.materialBank.getToonMaterial('terrain')
+      : this.materialBank.get('terrain');
     const terrainMesh = new THREE.Mesh(terrainGeom, terrainMat);
     terrainMesh.receiveShadow = true;
     chunkGroup.add(terrainMesh);
@@ -299,6 +307,9 @@ export class WorldStreamer {
       rubbleInst.instanceMatrix.needsUpdate = true;
       chunkGroup.add(rubbleInst);
     }
+
+    // E) Genshin Cel-Shaded Anime City (Architecture, Highrises, Sakura trees, Trams, Floating Islands)
+    this._buildAnimeCity(chunkGroup, placement, chunkOriginX, chunkOriginZ, chunkColliders);
 
     // Register colliders in CollisionWorld
     this.collisionWorld.addChunkColliders(key, chunkColliders);
@@ -471,9 +482,279 @@ export class WorldStreamer {
     }
   }
 
+  _buildAnimeCity(chunkGroup, placement, chunkOriginX, chunkOriginZ, chunkColliders) {
+    if (!placement.animeHouses && !placement.animeTowers && !placement.animeTrees && !placement.trams && !placement.hasSanctuary) {
+      return;
+    }
+
+    const rand = (() => {
+      let s = (this.worldSeed ^ (Math.floor(chunkOriginX) * 314159) ^ (Math.floor(chunkOriginZ) * 271828)) | 0;
+      return () => {
+        s = (s + 0x6D2B79F5) | 0;
+        let t = Math.imul(s ^ (s >>> 15), 1 | s);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    })();
+
+    const plasterGeos = [];
+    const roofGeos = [];
+    const stoneGeos = [];
+    const timberGeos = [];
+    const foliageGeos = [];
+    const leylineGeos = [];
+    const goldGeos = [];
+    const floatingStoneGeos = [];
+    const floatingLayer = new THREE.Group();
+    floatingLayer.name = 'Celestial_Antigravity_Layer';
+
+    // 1. Central Sanctuary (in chunk 0,0)
+    if (placement.hasSanctuary) {
+      // 3 Stacked Sanctuary Dais Tiers with step-up colliders
+      for (let s = 0; s < 3; s++) {
+        const topR = 11.5 - s * 1.8;
+        const botR = 12.2 - s * 1.8;
+        const tierCenterY = 1.2 + s * 0.7 - 0.15;
+        const cyl = new THREE.CylinderGeometry(topR, botR, 0.7, 16);
+        cyl.translate(-chunkOriginX, tierCenterY, -chunkOriginZ);
+        stoneGeos.push(paintGeo(cyl, 0xe5e5e5, 0x9ca3af, rand, 6));
+
+        // Step-up AABB colliders for each tier (tier 0 top: 1.40, tier 1 top: 2.10, tier 2 top: 2.80)
+        const tierTop = tierCenterY + 0.35;
+        const boxR = topR * 0.88;
+        chunkColliders.push({
+          min: [-boxR, 0, -boxR],
+          max: [boxR, tierTop, boxR]
+        });
+      }
+
+      // 4 sets of stepped stairs on North (+Z), South (-Z), East (+X), West (-X) avenues
+      // Each step has rise <= 0.35m so player can walk up smoothly without jumping
+      const stairDirs = [
+        { dx: 0, dz: 1 },   // North
+        { dx: 0, dz: -1 },  // South
+        { dx: 1, dz: 0 },   // East
+        { dx: -1, dz: 0 }   // West
+      ];
+      const stepTiers = [
+        { r: 11.0, topY: 1.55, h: 0.40 },
+        { r: 9.7,  topY: 1.90, h: 0.40 },
+        { r: 8.5,  topY: 2.25, h: 0.40 },
+        { r: 7.3,  topY: 2.60, h: 0.40 }
+      ];
+
+      for (const dir of stairDirs) {
+        for (const st of stepTiers) {
+          const sx = dir.dx * st.r - chunkOriginX;
+          const sz = dir.dz * st.r - chunkOriginZ;
+          const sw = dir.dx !== 0 ? 1.4 : 3.6;
+          const sd = dir.dz !== 0 ? 1.4 : 3.6;
+          const stepBox = makeBox(sw, st.h, sd, sx, st.topY - st.h / 2, sz);
+          stoneGeos.push(paintGeo(stepBox, 0xf1f5f9, 0xa8a29e, rand, 4));
+
+          chunkColliders.push({
+            min: [sx - sw / 2 + chunkOriginX, 0, sz - sd / 2 + chunkOriginZ],
+            max: [sx + sw / 2 + chunkOriginX, st.topY, sz + sd / 2 + chunkOriginZ]
+          });
+        }
+      }
+
+      // 8 Broken Sanctuary Columns
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2 + 0.39;
+        const px = Math.cos(a) * 9.2;
+        const pz = Math.sin(a) * 9.2;
+        const brokenH = (i % 3 === 0) ? 3.4 : 5.8;
+        const col = new THREE.CylinderGeometry(0.48, 0.56, brokenH, 8);
+        col.translate(px - chunkOriginX, 2.8 + brokenH / 2 - 0.15, pz - chunkOriginZ);
+        stoneGeos.push(paintGeo(col, 0xf8f9fa, 0xa8a29e, rand, 10));
+
+        chunkColliders.push({
+          min: [px - 0.6, 0, pz - 0.6],
+          max: [px + 0.6, 2.8 + brokenH, pz + 0.6]
+        });
+
+        if (i % 2 === 0) {
+          foliageGeos.push(paintGeo(makeBox(1.3, 0.6, 1.3, px - chunkOriginX, 2.8 + brokenH + 0.2 - 0.15, pz - chunkOriginZ, 0.7), 0x80ed99, 0x38a3a5, rand, 12));
+        }
+      }
+
+      // Floating Celestial Leyline Nail Core & Golden Rings
+      const nailCore = new THREE.CylinderGeometry(0.2, 1.35, 11.5, 6);
+      nailCore.translate(-chunkOriginX, 16.5, -chunkOriginZ);
+      leylineGeos.push(stripUV(nailCore));
+
+      const ring1 = new THREE.TorusGeometry(4.2, 0.16, 8, 28);
+      ring1.rotateX(Math.PI / 2.4);
+      ring1.translate(-chunkOriginX, 16.5, -chunkOriginZ);
+      goldGeos.push(stripUV(ring1));
+
+      const ring2 = new THREE.TorusGeometry(5.6, 0.14, 8, 28);
+      ring2.rotateX(-Math.PI / 3);
+      ring2.rotateY(0.5);
+      ring2.translate(-chunkOriginX, 16.5, -chunkOriginZ);
+      goldGeos.push(stripUV(ring2));
+
+      // 36 Floating Celestial Sky Islands & Leyline Crystals
+      for (let i = 0; i < 36; i++) {
+        const ang = (i / 36) * Math.PI * 2;
+        const rad = 14 + rand() * 34;
+        const h = 11 + rand() * 20;
+        const fx = Math.cos(ang) * rad;
+        const fz = Math.sin(ang) * rad;
+
+        const island = new THREE.ConeGeometry(0.9 + rand() * 1.4, 1.8 + rand() * 1.6, 6);
+        island.rotateX(Math.PI);
+        island.translate(fx - chunkOriginX, h, fz - chunkOriginZ);
+        floatingStoneGeos.push(paintGeo(island, 0x95d5b2, 0x57534e, rand, 28));
+
+        if (i % 3 === 0) {
+          const crys = new THREE.OctahedronGeometry(0.45, 0);
+          crys.scale(0.8, 1.8, 0.8);
+          crys.translate(fx - chunkOriginX, h + 1.3, fz - chunkOriginZ);
+          leylineGeos.push(stripUV(crys));
+        }
+      }
+    }
+
+    // 2. Anime Timber Houses
+    const roofPalettes = [
+      [0xe76f51, 0x9b2226],
+      [0x457b9d, 0x1d3557],
+      [0x2a9d8f, 0x1b4332],
+      [0xe9c46a, 0xb5838d]
+    ];
+
+    if (placement.animeHouses) {
+      placement.animeHouses.forEach((p, idx) => {
+        const pal = roofPalettes[idx % roofPalettes.length];
+        const ty = heightAt(p[0], p[1], this.worldSeed) - 0.15;
+        const res = addAnimeTimberHouse(p[0] - chunkOriginX, p[1] - chunkOriginZ, p[2], p[3], p[4], p[5], pal[0], pal[1], rand, ty);
+        stoneGeos.push(...res.stoneGeos);
+        plasterGeos.push(...res.plasterGeos);
+        timberGeos.push(...res.timberGeos);
+        roofGeos.push(...res.roofGeos);
+        foliageGeos.push(...res.foliageGeos);
+
+        for (const col of res.colliders) {
+          chunkColliders.push({
+            min: [col.min[0] + chunkOriginX, col.min[1], col.min[2] + chunkOriginZ],
+            max: [col.max[0] + chunkOriginX, col.max[1], col.max[2] + chunkOriginZ]
+          });
+        }
+      });
+    }
+
+    // 3. Shattered Anime Highrises
+    if (placement.animeTowers) {
+      placement.animeTowers.forEach((t) => {
+        const ty = heightAt(t[0], t[1], this.worldSeed) - 0.15;
+        const res = addShatteredAnimeHighrise(t[0] - chunkOriginX, t[1] - chunkOriginZ, t[2], t[3], t[4], t[5], rand, ty);
+        stoneGeos.push(...res.stoneGeos);
+        plasterGeos.push(...res.plasterGeos);
+        timberGeos.push(...res.timberGeos);
+        foliageGeos.push(...res.foliageGeos);
+        leylineGeos.push(...res.leylineGeos);
+        floatingStoneGeos.push(...res.floatingStoneGeos);
+
+        for (const col of res.colliders) {
+          chunkColliders.push({
+            min: [col.min[0] + chunkOriginX, col.min[1], col.min[2] + chunkOriginZ],
+            max: [col.max[0] + chunkOriginX, col.max[1], col.max[2] + chunkOriginZ]
+          });
+        }
+      });
+    }
+
+    // 4. Stylized Anime Trees
+    if (placement.animeTrees) {
+      placement.animeTrees.forEach((t) => {
+        const ty = heightAt(t[0], t[1], this.worldSeed) - 0.15;
+        const res = addStylizedAnimeTree(t[0] - chunkOriginX, t[1] - chunkOriginZ, t[2], this.worldSeed, ty);
+        timberGeos.push(...res.trunkGeos);
+        foliageGeos.push(...res.foliageGeos);
+        chunkColliders.push({
+          min: [res.collider.min[0] + chunkOriginX, res.collider.min[1], res.collider.min[2] + chunkOriginZ],
+          max: [res.collider.max[0] + chunkOriginX, res.collider.max[1], res.collider.max[2] + chunkOriginZ]
+        });
+      });
+    }
+
+    // 5. Overgrown Trams
+    if (placement.trams) {
+      placement.trams.forEach((tram) => {
+        const ty = heightAt(tram[0], tram[1], this.worldSeed) - 0.15;
+        const res = addOvergrownTram(tram[0] - chunkOriginX, tram[1] - chunkOriginZ, tram[2], this.worldSeed, ty);
+        stoneGeos.push(...res.stoneGeos);
+        plasterGeos.push(...res.plasterGeos);
+        foliageGeos.push(...res.foliageGeos);
+        chunkColliders.push({
+          min: [res.collider.min[0] + chunkOriginX, res.collider.min[1], res.collider.min[2] + chunkOriginZ],
+          max: [res.collider.max[0] + chunkOriginX, res.collider.max[1], res.collider.max[2] + chunkOriginZ]
+        });
+      });
+    }
+
+    // Helper to safely merge non-empty geometry arrays and add to parent group
+    const mergeAndAdd = (geos, matKey, name, parent = chunkGroup) => {
+      if (!geos || geos.length === 0) return;
+      const validGeos = [];
+      for (const g of geos) {
+        if (!g) continue;
+        const nonIdx = g.index ? g.toNonIndexed() : g.clone();
+        if (nonIdx.attributes.uv) nonIdx.deleteAttribute('uv');
+        validGeos.push(nonIdx);
+      }
+      if (validGeos.length === 0) return;
+      const merged = BufferGeometryUtils.mergeGeometries(validGeos, false);
+      if (merged) {
+        merged.computeBoundingBox();
+        const mat = this.materialBank.getToonMaterial
+          ? this.materialBank.getToonMaterial(matKey)
+          : this.materialBank.get(matKey);
+        const mesh = new THREE.Mesh(merged, mat);
+        mesh.name = name;
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        parent.add(mesh);
+      }
+    };
+
+    mergeAndAdd(plasterGeos, 'plaster', 'Anime_Plaster_Walls', chunkGroup);
+    mergeAndAdd(roofGeos, 'roofTile', 'Anime_Tiled_Roofs', chunkGroup);
+    mergeAndAdd(stoneGeos, 'stone', 'Anime_Stone_Foundations', chunkGroup);
+    mergeAndAdd(timberGeos, 'timber', 'Anime_Timber_Frames', chunkGroup);
+    mergeAndAdd(foliageGeos, 'foliage', 'Anime_Foliage', chunkGroup);
+    mergeAndAdd(leylineGeos, 'leyline', 'Anime_Leyline_Crystals', floatingLayer);
+    mergeAndAdd(goldGeos, 'goldRing', 'Anime_Gold_Rings', floatingLayer);
+    mergeAndAdd(floatingStoneGeos, 'stone', 'Anime_Sky_Islands', floatingLayer);
+
+    if (floatingLayer.children.length > 0) {
+      chunkGroup.add(floatingLayer);
+      this.floatingLayers.push(floatingLayer);
+      chunkGroup.userData.floatingLayer = floatingLayer;
+    }
+  }
+
+  updateAnimation(timeSeconds) {
+    if (this.floatingLayers && this.floatingLayers.length > 0) {
+      const bob = Math.sin(timeSeconds * 1.4) * 0.65;
+      const rot = timeSeconds * 0.09;
+      for (let i = 0; i < this.floatingLayers.length; i++) {
+        this.floatingLayers[i].position.y = bob;
+        this.floatingLayers[i].rotation.y = rot;
+      }
+    }
+  }
+
   _disposeChunk(key, chunkData) {
     this.scene.remove(chunkData.group);
     this.collisionWorld.removeChunkColliders(key);
+
+    if (chunkData.group && chunkData.group.userData && chunkData.group.userData.floatingLayer) {
+      const idx = this.floatingLayers.indexOf(chunkData.group.userData.floatingLayer);
+      if (idx !== -1) this.floatingLayers.splice(idx, 1);
+    }
 
     // Remove from active buildings list
     if (chunkData.buildings) {
@@ -508,6 +789,7 @@ export class WorldStreamer {
     this.buildQueue.length = 0;
     this.pendingKeys.clear();
     this.activeBuildings.length = 0;
+    this.floatingLayers.length = 0;
 
     this.drumGeom.dispose();
     this.barricadeGeom.dispose();

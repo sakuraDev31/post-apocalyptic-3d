@@ -175,3 +175,50 @@ export function generate(seed = 1337, lodLevel = 0, options = {}) {
   validateAssetResult(result);
   return result;
 }
+
+// ====================================================================
+// GENSHIN STYLIZED ANIME TREE (SAKURA, GINKGO, JADE)
+// ====================================================================
+import { paintGeo } from './BuildingGenerator.js';
+
+export function addStylizedAnimeTree(tx, tz, typeIdx = 0, seed = 777, terrainY = 0) {
+  const rand = (() => {
+    let s = seed ^ (Math.floor(tx) * 19349663) ^ (Math.floor(tz) * 83492791);
+    return () => {
+      s = (s + 0x6D2B79F5) | 0;
+      let t = Math.imul(s ^ (s >>> 15), 1 | s);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  })();
+
+  const trunkGeos = [];
+  const foliageGeos = [];
+
+  const trunk = new THREE.CylinderGeometry(0.22, 0.48, 3.4, 7);
+  trunk.rotateZ((rand() - 0.5) * 0.16);
+  trunk.translate(tx, terrainY + 1.6, tz);
+  trunkGeos.push(paintGeo(trunk, 0x5c3d2e, 0x2d1e17, rand, 6));
+
+  let cTop = 0xffb3c6, cBot = 0xfb6f92; // Sakura Pink
+  if (typeIdx === 1) { cTop = 0xffd166; cBot = 0xf4a261; } // Golden Ginkgo
+  else if (typeIdx === 2) { cTop = 0x80ed99; cBot = 0x2ec4b6; } // Jade Canopy
+
+  const puffs = [
+    [0, 3.8, 0, 1.85], [-1.1, 3.4, 0.6, 1.35], [1.1, 3.5, -0.5, 1.4],
+    [0.4, 4.4, 0.8, 1.3], [-0.6, 4.2, -0.8, 1.25]
+  ];
+  for (const pf of puffs) {
+    const puff = new THREE.IcosahedronGeometry(pf[3], 1);
+    puff.scale(1.15, 0.82, 1.15);
+    puff.translate(tx + pf[0], terrainY + pf[1], tz + pf[2]);
+    foliageGeos.push(paintGeo(puff, cTop, cBot, rand, 8));
+  }
+
+  const collider = {
+    min: [tx - 0.45, terrainY - 1.0, tz - 0.45],
+    max: [tx + 0.45, terrainY + 4.5, tz + 0.45]
+  };
+
+  return { trunkGeos, foliageGeos, collider };
+}

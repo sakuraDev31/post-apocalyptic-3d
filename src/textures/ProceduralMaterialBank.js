@@ -17,16 +17,35 @@ import * as THREE from 'three';
 import { SimplexNoise, createPRNG } from '../core/SeededNoise.js';
 import { MATERIAL_KEYS } from '../core/AssetContract.js';
 
+export function createToonRamp() {
+  const data = new Uint8Array([
+    110, 115, 135, 255,
+    170, 175, 190, 255,
+    228, 230, 238, 255,
+    255, 255, 255, 255
+  ]);
+  const tex = new THREE.DataTexture(data, 4, 1, THREE.RGBAFormat);
+  tex.minFilter = THREE.NearestFilter;
+  tex.magFilter = THREE.NearestFilter;
+  tex.needsUpdate = true;
+  return tex;
+}
+
 export class ProceduralMaterialBank {
   constructor(options = {}) {
     this.resolution = options.resolution || 512;
     this.materials = new Map();
+    this.toonMaterials = new Map();
     this.textures = [];
     this.noise = new SimplexNoise(options.seed || 4242);
     this.prng = createPRNG(options.seed || 4242);
     this.wireframe = false;
 
+    this.toonRamp = createToonRamp();
+    this.textures.push(this.toonRamp);
+
     this.init();
+    this.initToonMaterials();
   }
 
   /**
@@ -598,9 +617,54 @@ export class ProceduralMaterialBank {
   }
 
   /**
-   * Returns material by key. If missing, returns default grey material.
+   * Initializes Cel-Shaded Genshin Toon Materials matching Anime_PostApoc_City_Viewer_Fixed.html
+   */
+  initToonMaterials() {
+    const mats = {
+      terrain: new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: this.toonRamp, name: 'toon_terrain' }),
+      plaster: new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: this.toonRamp, name: 'toon_plaster' }),
+      roofTile: new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: this.toonRamp, name: 'toon_roofTile' }),
+      stone: new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: this.toonRamp, name: 'toon_stone' }),
+      timber: new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: this.toonRamp, name: 'toon_timber' }),
+      foliage: new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: this.toonRamp, name: 'toon_foliage' }),
+      leyline: new THREE.MeshStandardMaterial({
+        color: 0x56cfe1, emissive: 0x00b4d8, emissiveIntensity: 2.2, roughness: 0.15, metalness: 0.2, name: 'toon_leyline'
+      }),
+      goldRing: new THREE.MeshStandardMaterial({
+        color: 0xffd166, emissive: 0xf4a261, emissiveIntensity: 1.4, roughness: 0.25, metalness: 0.85, name: 'toon_goldRing'
+      })
+    };
+
+    for (const [key, mat] of Object.entries(mats)) {
+      this.toonMaterials.set(key, mat);
+    }
+    this.mats = mats;
+  }
+
+  /**
+   * Returns a cel-shaded toon material by name
+   */
+  getToonMaterial(key) {
+    if (this.toonMaterials.has(key)) {
+      return this.toonMaterials.get(key);
+    }
+    const fallback = new THREE.MeshToonMaterial({
+      color: 0xffffff,
+      vertexColors: true,
+      gradientMap: this.toonRamp,
+      name: `toon_${key}`
+    });
+    this.toonMaterials.set(key, fallback);
+    return fallback;
+  }
+
+  /**
+   * Returns material by key. Checks toon materials first, then standard PBR materials.
    */
   get(key) {
+    if (this.toonMaterials && this.toonMaterials.has(key)) {
+      return this.toonMaterials.get(key);
+    }
     if (this.materials.has(key)) {
       return this.materials.get(key);
     }
@@ -617,6 +681,9 @@ export class ProceduralMaterialBank {
     for (const mat of this.materials.values()) {
       mat.wireframe = this.wireframe;
     }
+    for (const mat of this.toonMaterials.values()) {
+      mat.wireframe = this.wireframe;
+    }
   }
 
   /**
@@ -629,7 +696,11 @@ export class ProceduralMaterialBank {
     for (const mat of this.materials.values()) {
       mat.dispose();
     }
+    for (const mat of this.toonMaterials.values()) {
+      mat.dispose();
+    }
     this.textures.length = 0;
     this.materials.clear();
+    this.toonMaterials.clear();
   }
 }

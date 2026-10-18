@@ -260,7 +260,14 @@ export class ThirdPersonCamera {
     // B) Terrain ground rule: camera must stay >= 0.3m above heightAt at its position.
     // Sample heightAt along the pivot->camera ray (8 samples).
     // If violated, shorten the distance (never push under terrain, never jitter).
-    if (worldQuery && worldQuery.heightAt) {
+    if (worldQuery && (worldQuery.heightAt || worldQuery.getHighestSurfaceY)) {
+      const getGround = (gx, gy, gz) => {
+        if (typeof worldQuery.getHighestSurfaceY === 'function') {
+          return worldQuery.getHighestSurfaceY(gx, gy, gz, (px, pz) => (worldQuery.heightAt ? worldQuery.heightAt(px, pz) : 0));
+        }
+        return worldQuery.heightAt ? worldQuery.heightAt(gx, gz) : 0;
+      };
+
       const steps = 8;
       let firstPenetrationIndex = -1;
 
@@ -271,7 +278,7 @@ export class ThirdPersonCamera {
         const ty = this._shoulderPivot.y - this._forward.y * testDist;
         const tz = this._shoulderPivot.z - this._forward.z * testDist;
 
-        const reqGroundY = worldQuery.heightAt(tx, tz) + 0.3;
+        const reqGroundY = getGround(tx, ty, tz) + 0.3;
         if (ty < reqGroundY) {
           firstPenetrationIndex = s;
           break;
@@ -288,7 +295,7 @@ export class ThirdPersonCamera {
           const mx = this._shoulderPivot.x - this._forward.x * mid;
           const my = this._shoulderPivot.y - this._forward.y * mid;
           const mz = this._shoulderPivot.z - this._forward.z * mid;
-          const terrY = worldQuery.heightAt(mx, mz) + 0.3;
+          const terrY = getGround(mx, my, mz) + 0.3;
 
           if (my < terrY) {
             high = mid; // Penetrated: pull in distance
@@ -303,7 +310,7 @@ export class ThirdPersonCamera {
       const endX = this._shoulderPivot.x - this._forward.x * finalDist;
       const endY = this._shoulderPivot.y - this._forward.y * finalDist;
       const endZ = this._shoulderPivot.z - this._forward.z * finalDist;
-      const minEndY = worldQuery.heightAt(endX, endZ) + 0.3;
+      const minEndY = getGround(endX, endY, endZ) + 0.3;
 
       if (endY < minEndY) {
         // Additional continuous bisection along ray to satisfy >= 0.3m ground clearance without lifting Y
@@ -314,7 +321,7 @@ export class ThirdPersonCamera {
           const mx = this._shoulderPivot.x - this._forward.x * mid;
           const my = this._shoulderPivot.y - this._forward.y * mid;
           const mz = this._shoulderPivot.z - this._forward.z * mid;
-          if (my < worldQuery.heightAt(mx, mz) + 0.3) {
+          if (my < getGround(mx, my, mz) + 0.3) {
             high = mid;
           } else {
             low = mid;

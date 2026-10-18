@@ -68,16 +68,16 @@ export class Game {
   initScene() {
     this.scene = new THREE.Scene();
 
-    // Natural dusty post-apocalyptic daylight sky (no blood-red fog!)
-    const bgCol = 0xb5b0a4;
+    // Golden Hour anime sky & distance fog
+    const bgCol = 0x7ec8e3;
     this.scene.background = new THREE.Color(bgCol);
-    this.scene.fog = new THREE.Fog(bgCol, 35, 220);
+    this.scene.fog = new THREE.FogExp2(0xc9e4de, 0.006);
 
     this.camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 400);
 
-    // Directional Overhead Sun following player with crisp daylight shadows
-    this.dirLight = new THREE.DirectionalLight(0xfff8ee, 2.6);
-    this.dirLight.position.set(10, 65, 14);
+    // Warm Golden Hour directional sun following player with crisp shadows
+    this.dirLight = new THREE.DirectionalLight(0xffe5a3, 2.3);
+    this.dirLight.position.set(20, 65, 24);
     this.dirLight.castShadow = true;
     this.dirLight.shadow.mapSize.width = 1024;
     this.dirLight.shadow.mapSize.height = 1024;
@@ -97,12 +97,17 @@ export class Game {
     this.sunMesh = new THREE.Mesh(sunGeom, sunMat);
     this.scene.add(this.sunMesh);
 
-    // Ambient & Hemisphere Lighting for bright, crisp wasteland visibility
-    this.hemiLight = new THREE.HemisphereLight(0x98c5f7, 0x64543e, 1.2);
+    // Anime Hemisphere light: warm golden sky and lush foliage ground bounce
+    this.hemiLight = new THREE.HemisphereLight(0xfff4d6, 0x4d7c5d, 1.2);
     this.scene.add(this.hemiLight);
 
     this.ambLight = new THREE.AmbientLight(0x444038, 0.85);
     this.scene.add(this.ambLight);
+
+    // Leyline radiant beacon point light at central sanctuary
+    this.leylineLight = new THREE.PointLight(0x48cae4, 5.0, 45);
+    this.leylineLight.position.set(0, 18, 0);
+    this.scene.add(this.leylineLight);
   }
 
   initWorld() {
@@ -119,16 +124,23 @@ export class Game {
     this.scene.add(this.playerModel);
 
     this.playerAnimator = new PlayerAnimator(this.playerModel);
-    this.playerController = new PlayerController(this.playerModel);
+    this.playerController = new PlayerController(this.playerModel, {
+      jumpVelocity: 6.8,
+      gravity: -20.0,
+      airControl: 0.6
+    });
 
-    // Spawn on the road at (0, heightAt(0,0), 0) facing along +Z
-    const spawnY = this.collisionWorld.heightAt(0, 0);
-    this.playerController.spawn(0, spawnY, 0, 0);
+    // Spawn on the avenue in front of Central Sanctuary looking North toward celestial nail
+    const spawnZ = 26.0;
+    const spawnY = this.collisionWorld.getHighestSurfaceY
+      ? this.collisionWorld.getHighestSurfaceY(0, 0, spawnZ)
+      : this.collisionWorld.heightAt(0, spawnZ);
+    this.playerController.spawn(0, spawnY, spawnZ, Math.PI);
 
     // Default to shoulder camera (FOV 60, dist 3.0m, pitch +12 deg, player fills ~50% screen)
     this.thirdPersonCamera = new ThirdPersonCamera(this.camera, {
       mode: 'shoulder',
-      initialYaw: 0,
+      initialYaw: Math.PI,
       sensitivity: 0.12
     });
   }
@@ -195,9 +207,10 @@ export class Game {
     if (this.renderer) {
       this.renderer.toneMappingExposure = this.brightness;
     }
-    if (this.dirLight) this.dirLight.intensity = 2.6 * this.brightness;
+    if (this.dirLight) this.dirLight.intensity = 2.3 * this.brightness;
     if (this.hemiLight) this.hemiLight.intensity = 1.2 * this.brightness;
     if (this.ambLight) this.ambLight.intensity = 0.85 * this.brightness;
+    if (this.leylineLight) this.leylineLight.intensity = 5.0 * this.brightness;
   }
 
   setCameraMode(mode) {
@@ -215,21 +228,24 @@ export class Game {
 
     if (tier === 'low') {
       this.renderer.shadowMap.enabled = false;
-      this.scene.fog.far = 140;
+      if (this.scene.fog && this.scene.fog.density !== undefined) this.scene.fog.density = 0.009;
+      else if (this.scene.fog) this.scene.fog.far = 140;
     } else if (tier === 'medium') {
       this.renderer.shadowMap.enabled = true;
       this.dirLight.shadow.mapSize.width = 1024;
       this.dirLight.shadow.mapSize.height = 1024;
       this.dirLight.shadow.map?.dispose();
       this.dirLight.shadow.map = null;
-      this.scene.fog.far = 220;
+      if (this.scene.fog && this.scene.fog.density !== undefined) this.scene.fog.density = 0.006;
+      else if (this.scene.fog) this.scene.fog.far = 220;
     } else if (tier === 'high') {
       this.renderer.shadowMap.enabled = true;
       this.dirLight.shadow.mapSize.width = 2048;
       this.dirLight.shadow.mapSize.height = 2048;
       this.dirLight.shadow.map?.dispose();
       this.dirLight.shadow.map = null;
-      this.scene.fog.far = 260;
+      if (this.scene.fog && this.scene.fog.density !== undefined) this.scene.fog.density = 0.004;
+      else if (this.scene.fog) this.scene.fog.far = 260;
     }
   }
 
@@ -326,8 +342,9 @@ export class Game {
       this.collisionWorld
     );
 
-    // 3. World Streaming around Player
+    // 3. World Streaming around Player & Celestial Layer Animation
     this.worldStreamer.update(this.playerController.position);
+    this.worldStreamer.updateAnimation(now * 0.001);
 
     // 4. Directional overhead sun and shadow follows player
     const pPos = this.playerController.position;

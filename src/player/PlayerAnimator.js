@@ -17,9 +17,11 @@ export class PlayerAnimator {
 
     // Cache joint references by exact name
     const jointNames = [
-      'root', 'hips', 'spine', 'chest', 'neck', 'head',
+      'root', 'hips', 'torso', 'spine', 'chest', 'neck', 'head', 'neckScarf',
       'shoulderL', 'shoulderR', 'elbowL', 'elbowR',
-      'hipL', 'hipR', 'kneeL', 'kneeR'
+      'hipL', 'hipR', 'kneeL', 'kneeR',
+      'leftArm', 'rightArm', 'leftForearm', 'rightForearm',
+      'leftLeg', 'rightLeg', 'leftShin', 'rightShin'
     ];
 
     if (playerModel) {
@@ -31,13 +33,13 @@ export class PlayerAnimator {
     }
 
     // Initial joint base transforms
-    this.baseHipsY = this.joints.hips ? this.joints.hips.position.y : 0.95;
+    this.baseHipsY = this.joints.hips ? this.joints.hips.position.y : 0.92;
 
     // Phase & timers
     this.walkPhase = 0;
     this.breathTime = 0;
     this.landSquashTimer = 0;
-    this.landSquashDuration = 0.1;
+    this.landSquashDuration = 0.12; // 120ms land impact squash
     this.landSquashMagnitude = 0.12;
     this.anticipationTimer = 0;
     this.wasGrounded = true;
@@ -51,6 +53,8 @@ export class PlayerAnimator {
       spineTwistY: 0,
       chestLeanX: 0,
       headPitchX: 0,
+      scarfPitchX: 0,
+      scarfSwayZ: 0,
       armSwingL: 0,
       armSwingR: 0,
       armOutL: 0,
@@ -132,6 +136,8 @@ export class PlayerAnimator {
     let targetSpineTwistY = 0;
     let targetChestLeanX = 0;
     let targetHeadPitchX = 0;
+    let targetScarfPitchX = 0.12;
+    let targetScarfSwayZ = 0;
     let targetArmSwingL = 0;
     let targetArmSwingR = 0;
     let targetArmOutL = 0;
@@ -151,10 +157,12 @@ export class PlayerAnimator {
       targetKneeBendL += (this.landSquashMagnitude * 2.2) * absorbFactor;
       targetKneeBendR += (this.landSquashMagnitude * 2.2) * absorbFactor;
       targetSpineLeanX += (this.landSquashMagnitude * 1.2) * absorbFactor;
+      targetScarfPitchX = 0.35 * absorbFactor;
     }
 
-    // 2. Air states: Jump Up / Fall
+    // 2. Air states: Jump Up / Fall (trailing cape, arms raised for balance)
     if (!isGrounded) {
+      targetScarfPitchX = -0.20; // Cape trailing downward
       if (this.anticipationTimer > 0) {
         // 0.08s anticipation crouch: slight hip dip and knee bend before launch
         targetHipsY = this.baseHipsY - 0.16;
@@ -193,17 +201,15 @@ export class PlayerAnimator {
         targetKneeBendR = 0.35;
       }
     } else if (isCrouching) {
-      // 3. Crouch states
-      // Thighs and knees forward, torso leaning slightly forward, no foot floating or sinking
-      targetHipsY = this.baseHipsY - 0.36; // Lower hips to 0.59m
-      targetSpineLeanX = 0.22; // Torso leaning slightly forward
+      // 3. Crouch states (lower hip position.y by -0.38m, stealthy forward lean)
+      targetHipsY = this.baseHipsY - 0.38; // Lower hips by 0.38m
+      targetSpineLeanX = 0.22; // Stealthy forward torso lean
       targetChestLeanX = 0.08;
-      targetHeadPitchX = -0.20; // Head looks forward/up to compensate for spine lean
+      targetHeadPitchX = -0.20; // Head looks forward/up to compensate
+      targetScarfPitchX = 0.14;
 
       if (!isMoving) {
         // Crouch Idle:
-        // Negative hip rotation.x swings thighs FORWARD (+Z)
-        // Positive knee rotation.x bends shins BACKWARD (-Z) to place feet flat on ground at y=0
         targetLegSwingL = -0.75;
         targetLegSwingR = -0.75;
         targetKneeBendL = 1.55;
@@ -215,7 +221,6 @@ export class PlayerAnimator {
       } else {
         // Crouch Walk (low athletic shuffle):
         const cSin = Math.sin(this.walkPhase);
-        // Thighs forward with alternating shuffle swing
         targetLegSwingL = -0.75 - cSin * 0.22;
         targetLegSwingR = -0.75 + cSin * 0.22;
         targetKneeBendL = 1.55 + Math.max(0, -cSin) * 0.25;
@@ -226,14 +231,16 @@ export class PlayerAnimator {
         targetElbowR = -0.55;
       }
     } else if (isMoving) {
-      // 4. Locomotion: Walk / Run / Sprint
+      // 4. Locomotion: Walk / Run / Sprint (forward torso lean 0.18 rad on sprint, billowing scarf/cape)
       const sinWalk = Math.sin(this.walkPhase);
 
       if (isSprinting) {
-        // Sprint (aggressive forward lean, high knee drive)
+        // Sprint (0.28 rad forward torso lean, billowing scarf)
         targetSpineLeanX = 0.28;
-        targetChestLeanX = 0.10;
+        targetChestLeanX = 0.08;
         targetSpineTwistY = -sinWalk * 0.15;
+        targetScarfPitchX = 0.52 + Math.sin(this.walkPhase) * 0.14;
+        targetScarfSwayZ = Math.cos(this.walkPhase) * 0.10;
 
         // Negative rotation swings leg forward
         targetLegSwingL = -sinWalk * 0.75;
@@ -246,9 +253,11 @@ export class PlayerAnimator {
         targetElbowL = -0.8 - Math.max(0, -sinWalk) * 0.4;
         targetElbowR = -0.8 - Math.max(0, sinWalk) * 0.4;
       } else if (isRunning) {
-        // Run (moderate lean)
-        targetSpineLeanX = 0.14;
+        // Run (moderate lean, billowing cape)
+        targetSpineLeanX = 0.10;
         targetSpineTwistY = -sinWalk * 0.08;
+        targetScarfPitchX = 0.35 + Math.sin(this.walkPhase) * 0.10;
+        targetScarfSwayZ = Math.cos(this.walkPhase) * 0.06;
 
         targetLegSwingL = -sinWalk * 0.58;
         targetLegSwingR = sinWalk * 0.58;
@@ -260,9 +269,11 @@ export class PlayerAnimator {
         targetElbowL = -0.55;
         targetElbowR = -0.55;
       } else {
-        // Walk (upright, relaxed swing)
+        // Walk (subtle natural lean, gentle cape swing)
         targetSpineLeanX = 0.04;
         targetSpineTwistY = -sinWalk * 0.04;
+        targetScarfPitchX = 0.20 + Math.sin(this.walkPhase) * 0.08;
+        targetScarfSwayZ = Math.cos(this.walkPhase) * 0.04;
 
         targetLegSwingL = -sinWalk * 0.42;
         targetLegSwingR = sinWalk * 0.42;
@@ -275,7 +286,7 @@ export class PlayerAnimator {
         targetElbowR = -0.3;
       }
     } else {
-      // 5. Standing Idle (breathing oscillation)
+      // 5. Standing Idle (subtle breathing torso bob, gentle cape sway)
       const breath = Math.sin(this.breathTime);
       targetSpineLeanX = 0.02 + breath * 0.015;
       targetChestLeanX = breath * 0.02;
@@ -283,9 +294,11 @@ export class PlayerAnimator {
       targetElbowL = -0.22 + breath * 0.03;
       targetElbowR = -0.22 + breath * 0.03;
       targetHipsY = this.baseHipsY + breath * 0.005;
+      targetScarfPitchX = 0.12 + Math.sin(this.breathTime * 1.5) * 0.05;
+      targetScarfSwayZ = Math.cos(this.breathTime * 1.5) * 0.03;
     }
 
-    // Exponential smoothing for all joints (rate 16/s prevents pops)
+    // Smooth Euler/quaternion transitions (rate 16/s prevents pops)
     const blendRate = 16.0;
     const blendFactor = 1.0 - Math.exp(-blendRate * dt);
 
@@ -297,6 +310,8 @@ export class PlayerAnimator {
         spineTwistY: targetSpineTwistY,
         chestLeanX: targetChestLeanX,
         headPitchX: targetHeadPitchX,
+        scarfPitchX: targetScarfPitchX,
+        scarfSwayZ: targetScarfSwayZ,
         armSwingL: targetArmSwingL,
         armSwingR: targetArmSwingR,
         armOutL: targetArmOutL,
@@ -331,6 +346,10 @@ export class PlayerAnimator {
     }
     if (joints.head) {
       joints.head.rotation.x = current.headPitchX;
+    }
+    if (joints.neckScarf) {
+      joints.neckScarf.rotation.x = current.scarfPitchX;
+      joints.neckScarf.rotation.z = current.scarfSwayZ;
     }
 
     // Left Arm

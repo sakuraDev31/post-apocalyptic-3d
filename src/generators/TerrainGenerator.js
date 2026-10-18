@@ -14,6 +14,24 @@ import * as THREE from 'three';
 import { SimplexNoise, createPRNG, evaluateSpline } from '../core/SeededNoise.js';
 import { MATERIAL_KEYS, computeBoundsAndTriangles, validateAssetResult } from '../core/AssetContract.js';
 
+function hash2D(x, z, seed = 1337) {
+  const h = Math.sin(x * 127.1 + z * 311.7 + seed * 74.7) * 43758.5453;
+  return h - Math.floor(h);
+}
+
+function smoothNoise(x, z, seed = 1337) {
+  const ix = Math.floor(x), iz = Math.floor(z);
+  const fx = x - ix, fz = z - iz;
+  const u = fx * fx * (3 - 2 * fx);
+  const v = fz * fz * (3 - 2 * fz);
+  return (
+    hash2D(ix, iz, seed) * (1 - u) * (1 - v) +
+    hash2D(ix + 1, iz, seed) * u * (1 - v) +
+    hash2D(ix, iz + 1, seed) * (1 - u) * v +
+    hash2D(ix + 1, iz + 1, seed) * u * v
+  );
+}
+
 /**
  * Continuous road center X position at world coordinate z
  */
@@ -25,34 +43,19 @@ export function roadCenterX(z, seed = 1337) {
 /**
  * Pure shared elevation function used by both main thread physics and workers
  */
-export function heightAt(x, z, seed = 1337) {
-  const noise = new SimplexNoise(seed);
-
-  // 1. Base gentle rolling hills (fBm)
-  const baseElev = noise.fbm2D(x * 0.012, z * 0.012, 3, 2.0, 0.45) * 4.5;
-  const secondary = noise.noise2D(x * 0.028 + 5.0, z * 0.028 + 5.0) * 1.2;
-  const naturalHeight = baseElev + secondary;
-
-  // 2. Road spline elevation
-  const rx = roadCenterX(z, seed);
-  const distToRoad = Math.abs(x - rx);
-  const roadElevation = Math.sin(z * 0.01) * 2.0;
-
-  const roadBedHalfW = 3.5;  // 7m wide road bed
-  const shoulderHalfW = 4.5; // 9m blend zone
-
-  if (distToRoad <= roadBedHalfW) {
-    // Subtle road crown (center +0.12m higher)
-    const crown = 0.12 * (1.0 - Math.pow(distToRoad / roadBedHalfW, 2));
-    return roadElevation + crown;
-  } else if (distToRoad < (roadBedHalfW + shoulderHalfW)) {
-    const blend = (distToRoad - roadBedHalfW) / shoulderHalfW;
-    const smoothBlend = blend * blend * (3 - 2 * blend);
-    return roadElevation * (1.0 - smoothBlend) + naturalHeight * smoothBlend;
+export function getTerrainHeightAt(x, z, seed = 1337) {
+  const r = Math.hypot(x, z);
+  if (r < 52) {
+    if (r < 11) return 1.2;
+    if (r < 14) return 1.2 * (1 - (r - 11) / 3.0);
+    return 0.0;
   }
-
-  return naturalHeight;
+  const hillFactor = Math.min(1.0, Math.pow((r - 52) / 38, 1.2));
+  const n = smoothNoise(x * 0.025, z * 0.025, seed) * 8.0 + smoothNoise(x * 0.05, z * 0.05, seed + 7) * 2.0;
+  return hillFactor * n;
 }
+
+export const heightAt = getTerrainHeightAt;
 
 /**
  * Generates raw vertex data for a terrain chunk
@@ -232,83 +235,46 @@ export function generateTerrainRaw(seed = 1337, lodLevel = 0, options = {}) {
     const wx = originX + positions[idx];
     const wz = originZ + positions[idx + 2];
 
-    // Road factor
-    const rx = roadCenterX(wz, seed);
-    const distToRoad = Math.abs(wx - rx);
+    const cGrassLush = new THREE.Color(0x52b788);
+    const cGrassSun  = new THREE.Color(0x95d5b2);
+    const cPlazaWarm = new THREE.Color(0xe6ccb2);
+    const cRoadSlate = new THREE.Color(0x414859);
+    const cCrosswalk = new THREE.Color(0xf1faee);
+    const cSidewalk  = new THREE.Color(0xcbd5e1);
+    const cMossPatch = new THREE.Color(0x74c69d);
+    const tmp = new THREE.Color();
 
-    // Low-frequency macro color variation across wasteland
-    const macroTint = noise.noise2D(wx * 0.008, wz * 0.008) * 0.08;
+    const r = Math.hypot(wx, wz);
+    const onMainAve = (Math.abs(wx) < 4.8 || Math.abs(wz) < 4.8) && r < 50;
+    const onRingRoad = Math.abs(r - 32.0) < 3.6;
+    const onSidewalk = ((Math.abs(wx) < 6.8 || Math.abs(wz) < 6.8) && r < 50) || Math.abs(r - 32.0) < 5.2;
 
-    // Base dusty earth color (smooth and low contrast)
-    let r = 0.52 + macroTint;
-    let g = 0.46 + macroTint * 0.9;
-    let b = 0.38 + macroTint * 0.8;
-
-    // Steeper rock slope tint
-    const slope = Math.max(0, Math.min(1, normY));
-    if (slope < 0.85) {
-      const rockFactor = (0.85 - slope) / 0.85;
-      r = r * (1 - rockFactor) + 0.38 * rockFactor;
-      g = g * (1 - rockFactor) + 0.37 * rockFactor;
-      b = b * (1 - rockFactor) + 0.36 * rockFactor;
+    if (r < 13.5) {
+      const mossVal = hash2D(Math.floor(wx * 2), Math.floor(wz * 2), seed);
+      tmp.copy(cPlazaWarm).lerp(cMossPatch, (mossVal < 0.22) ? 0.45 : 0.05);
+    } else if (onMainAve || onRingRoad) {
+      const isCrosswalk = (Math.abs(Math.abs(wx) - 16) < 1.8 && Math.abs(wz) < 4.2 && Math.sin(wz * 3.5) > 0) ||
+                          (Math.abs(Math.abs(wz) - 16) < 1.8 && Math.abs(wx) < 4.2 && Math.sin(wx * 3.5) > 0);
+      const mossVal = hash2D(Math.floor(wx), Math.floor(wz), seed);
+      if (mossVal < 0.16) {
+        tmp.copy(cMossPatch);
+      } else if (isCrosswalk) {
+        tmp.copy(cCrosswalk);
+      } else {
+        tmp.copy(cRoadSlate);
+      }
+    } else if (onSidewalk) {
+      const mossVal = hash2D(Math.floor(wx), Math.floor(wz), seed) * 0.25;
+      tmp.copy(cSidewalk).lerp(cMossPatch, mossVal);
+    } else {
+      const nBlend = smoothNoise(wx * 0.08, wz * 0.08, seed);
+      const y = positions[idx + 1];
+      tmp.copy(cGrassLush).lerp(cGrassSun, nBlend * 0.75 + (y > 3 ? 0.2 : 0));
     }
 
-    // Road overlay: detailed textured asphalt with curve markings & shoulders
-    const roadBedW = 3.5;
-    const shoulderW = 4.5;
-
-    if (distToRoad < roadBedW) {
-      // Base dark aged tarmac with micro-noise
-      const tarmacNoise = noise.noise2D(wx * 0.2, wz * 0.2) * 0.03;
-      r = 0.20 + tarmacNoise;
-      g = 0.21 + tarmacNoise;
-      b = 0.22 + tarmacNoise;
-
-      // Darker wheel wear tracks along the curve lanes (+/- 1.6m from center)
-      const distFromLane = Math.min(Math.abs(distToRoad - 1.6), Math.abs(distToRoad + 1.6));
-      if (distFromLane < 0.6) {
-        const laneWear = (1.0 - distFromLane / 0.6) * 0.05;
-        r = Math.max(0.12, r - laneWear);
-        g = Math.max(0.13, g - laneWear);
-        b = Math.max(0.14, b - laneWear);
-      }
-
-      // Faded white/weathered road edge lines along curves (at 3.1m - 3.3m)
-      if (distToRoad > 3.05 && distToRoad < 3.35) {
-        const dash = Math.sin(wz * 0.35);
-        if (dash > -0.4) {
-          r = 0.72; g = 0.70; b = 0.65;
-        }
-      }
-
-      // Cracked faded yellow centerline
-      if (distToRoad < 0.22 && Math.sin(wz * 0.8) > 0.05) {
-        r = 0.88; g = 0.72; b = 0.22;
-      }
-    } else if (distToRoad < roadBedW + shoulderW) {
-      // Gravel shoulder with dusty blend
-      const blend = (distToRoad - roadBedW) / shoulderW;
-      const smoothBlend = blend * blend * (3 - 2 * blend);
-      const shoulderR = 0.38 + noise.noise2D(wx * 0.1, wz * 0.1) * 0.04;
-      const shoulderG = 0.34 + noise.noise2D(wx * 0.1, wz * 0.1) * 0.03;
-      const shoulderB = 0.28;
-
-      const baseRoadR = 0.20;
-      const baseRoadG = 0.21;
-      const baseRoadB = 0.22;
-
-      const midR = baseRoadR * (1 - smoothBlend) + shoulderR * smoothBlend;
-      const midG = baseRoadG * (1 - smoothBlend) + shoulderG * smoothBlend;
-      const midB = baseRoadB * (1 - smoothBlend) + shoulderB * smoothBlend;
-
-      r = midR * (1 - smoothBlend) + r * smoothBlend;
-      g = midG * (1 - smoothBlend) + g * smoothBlend;
-      b = midB * (1 - smoothBlend) + b * smoothBlend;
-    }
-
-    colors[idx] = r;
-    colors[idx + 1] = g;
-    colors[idx + 2] = b;
+    colors[idx] = tmp.r;
+    colors[idx + 1] = tmp.g;
+    colors[idx + 2] = tmp.b;
   }
 
   // For skirt normals, point outward / down
