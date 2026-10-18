@@ -13,12 +13,14 @@ var storm_active: bool = false
 var storm_intensity: float = 0.0
 
 func _ready() -> void:
-	# Link Player to HUD and Touch Controls
+	# Link Player to HUD, Touch Controls, and WorldStreamer
 	if player:
 		if hud:
 			hud.setup(player)
 		if touch_controls:
 			touch_controls.setup(player)
+		if has_node("WorldStreamer") and $WorldStreamer.has_method("setup"):
+			$WorldStreamer.setup(player)
 			
 	# Automatically generate collision on imported city model if present
 	_setup_city_collisions()

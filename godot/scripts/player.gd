@@ -53,11 +53,26 @@ var external_move_vector: Vector2 = Vector2.ZERO
 @onready var camera_rig: Node3D = $CameraRig
 @onready var ceiling_check: ShapeCast3D = $CeilingCheck
 
+const PlayerModelScript = preload("res://scripts/player/player_model.gd")
+const PlayerAnimatorScript = preload("res://scripts/player/player_animator.gd")
+
+var player_model = null
+var player_animator = null
+
 func _ready() -> void:
+	add_to_group("player")
 	health = max_health
 	stamina = max_stamina
 	floor_snap_length = 0.35
 	floor_max_angle = deg_to_rad(40.0) # Clamped to 40 deg slopes
+
+	# Initialize procedural anime scavenger character model & animator
+	if visual_mesh:
+		for child in visual_mesh.get_children():
+			child.queue_free()
+		player_model = PlayerModelScript.new()
+		visual_mesh.add_child(player_model)
+		player_animator = PlayerAnimatorScript.new(player_model)
 	
 	emit_signal("health_changed", health, max_health)
 	emit_signal("stamina_changed", stamina, max_stamina)
@@ -89,6 +104,10 @@ func _physics_process(delta: float) -> void:
 
 	# 9. Commit Physics
 	move_and_slide()
+
+	# 10. Update Procedural Skeletal Animation
+	if player_animator:
+		player_animator.update(delta, velocity, is_on_floor(), is_crouching, is_sprinting)
 
 func _update_timers(delta: float) -> void:
 	if is_on_floor():

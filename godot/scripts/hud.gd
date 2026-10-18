@@ -10,12 +10,16 @@ var player_ref: CharacterBody3D = null
 
 func setup(player: CharacterBody3D) -> void:
 	player_ref = player
-	player.health_changed.connect(_on_health_changed)
-	player.stamina_changed.connect(_on_stamina_changed)
+	if player.has_signal("health_changed"):
+		player.connect("health_changed", _on_health_changed)
+	if player.has_signal("stamina_changed"):
+		player.connect("stamina_changed", _on_stamina_changed)
 
 func _process(_delta: float) -> void:
 	if player_ref and compass_label:
-		var deg = wrapf(rad_to_deg(player_ref.visual_mesh.rotation.y), 0.0, 360.0)
+		var visual = player_ref.get_node_or_null("VisualMesh")
+		var rot_y = visual.rotation.y if visual else player_ref.rotation.y
+		var deg = wrapf(rad_to_deg(rot_y), 0.0, 360.0)
 		compass_label.text = "%d° %s" % [int(deg), _get_cardinal(deg)]
 
 func _get_cardinal(deg: float) -> String:

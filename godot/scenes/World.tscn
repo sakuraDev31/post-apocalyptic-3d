@@ -4,6 +4,8 @@
 [ext_resource type="PackedScene" path="res://scenes/Player.tscn" id="2_player"]
 [ext_resource type="PackedScene" path="res://scenes/HUD.tscn" id="3_hud"]
 [ext_resource type="PackedScene" path="res://scenes/TouchControls.tscn" id="4_touch"]
+[ext_resource type="Script" path="res://scripts/world/world_streamer.gd" id="5_streamer"]
+[ext_resource type="PackedScene" path="res://scenes/Drone.tscn" id="6_drone"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_1"]
 sky_top_color = Color(0.25, 0.32, 0.45, 1)
@@ -60,6 +62,12 @@ mesh = SubResource("BoxMesh_ground")
 
 [node name="Player" parent="." instance=ExtResource("2_player")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0)
+
+[node name="WorldStreamer" type="Node3D" parent="."]
+script = ExtResource("5_streamer")
+
+[node name="Drone" parent="." instance=ExtResource("6_drone")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 15, 6, 15)
 
 [node name="HUD" parent="." instance=ExtResource("3_hud")]
 
