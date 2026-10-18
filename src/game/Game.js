@@ -62,7 +62,7 @@ export class Game {
     this.scene.background = new THREE.Color(bgCol);
     this.scene.fog = new THREE.Fog(bgCol, 35, 220);
 
-    this.camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.1, 400);
+    this.camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 400);
 
     // Directional Overhead Sun following player with crisp daylight shadows
     this.dirLight = new THREE.DirectionalLight(0xfff8ee, 2.6);
@@ -125,6 +125,9 @@ export class Game {
   initUI() {
     this.touchControls = new TouchControls({
       container: this.container,
+      onZoom: (delta) => {
+        this.thirdPersonCamera.adjustZoom(delta);
+      },
       onInteract: () => {
         this.gameHUD?.showToast('No interactive objects in range');
       }
@@ -136,8 +139,14 @@ export class Game {
       quality: this.quality,
       brightness: this.brightness,
       cameraMode: this.thirdPersonCamera.mode,
+      onZoom: (delta) => {
+        this.thirdPersonCamera.adjustZoom(delta);
+      },
       onPauseToggle: (paused) => {
         this.isPaused = paused;
+        if (paused) {
+          this.touchControls?.reset();
+        }
       },
       onResume: () => {
         this.isPaused = false;
@@ -173,7 +182,7 @@ export class Game {
   setBrightness(factor) {
     this.brightness = Math.max(0.5, Math.min(2.5, factor));
     if (this.renderer) {
-      this.renderer.toneMappingExposure = 1.05 * this.brightness;
+      this.renderer.toneMappingExposure = this.brightness;
     }
     if (this.dirLight) this.dirLight.intensity = 2.6 * this.brightness;
     if (this.hemiLight) this.hemiLight.intensity = 1.2 * this.brightness;
@@ -182,6 +191,9 @@ export class Game {
 
   setCameraMode(mode) {
     this.thirdPersonCamera.setMode(mode);
+    if (this.gameHUD && this.gameHUD.cameraMode !== mode) {
+      this.gameHUD.setCameraMode(mode);
+    }
   }
 
   applyQuality(tier) {
@@ -265,7 +277,11 @@ export class Game {
       });
     }
 
-    if (this.isPaused) return;
+    if (this.isPaused) {
+      // Physics, input, and animation are frozen; render continues dimmed
+      this.renderer.render(this.scene, this.camera);
+      return;
+    }
 
     // 1. Fixed Timestep Physics Loop (60 Hz)
     this.accumulator += delta;

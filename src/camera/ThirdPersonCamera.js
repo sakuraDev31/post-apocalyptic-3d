@@ -1,17 +1,15 @@
 /**
  * ThirdPersonCamera.js
  * 
- * Over-the-shoulder third-person camera (PUBG / Free Fire / COD style):
- * - Pivot = player position + (0, 1.5) standing, (0, 1.0) crouch, smoothed
- * - Right-shoulder offset +0.5m
- * - Distance 2.6m (crouch 2.3m, sprint 2.9m with FOV +4)
- * - Vertical FOV 62
- * - Pitch clamp: -20 deg to +55 deg, Yaw unlimited
- * - Look sensitivity default 0.12 deg/px (slider 0.05 to 0.30)
- * - Position smoothing rate 14/s
- * - Collision: ray + 0.2m margin against building AABBs and terrain (+0.3m), min distance 0.7m
- * - Look target = pivot + camera forward * 8 (crosshair screen center)
- * - Framing: player occupies 45-60% of screen height, slightly left of center
+ * Over-the-shoulder third-person camera & overhead view:
+ * - Full 360 deg yaw (unlimited).
+ * - Pitch clamp: -40 deg (near ground looking UP at player) to +80 deg (near top-down).
+ * - Defaults: FOV 60, default pitch +12 deg, right-shoulder offset 0.5m scaled down as you zoom out.
+ * - Standing player fills ~45-55% of screen height at default zoom (dist 3.0m, FOV 60).
+ * - Ground clearance: camera must stay >= 0.3m above terrain along ray (8 samples, bisection pullback, zero jitter).
+ * - Building & prop collision: ray pullback with 0.2m margin, min distance 0.7m.
+ * - Zoom: range 1.5m to 7.0m (default 3.0m), smooth exponential rate 10/s. Remember zoom per stance.
+ * - Overhead mode: smoothly toggles top-down view (pitch 70 deg, distance 12m) and back.
  */
 
 import * as THREE from 'three';
@@ -19,37 +17,54 @@ import * as THREE from 'three';
 export class ThirdPersonCamera {
   constructor(camera, options = {}) {
     this.camera = camera;
-    this.camera.fov = options.fov || 62;
+    this.camera.fov = options.fov || (camera.fov !== undefined && camera.fov !== 50 ? camera.fov : 60);
     this.camera.updateProjectionMatrix();
 
     this.mode = options.mode || 'shoulder'; // 'overhead' | 'shoulder'
     this.isOverhead = this.mode === 'overhead';
 
+    // Pitch limits: -40 deg to +80 deg
+    this.minPitch = options.minPitch !== undefined ? options.minPitch : -40 * (Math.PI / 180);
+    this.maxPitch = options.maxPitch !== undefined ? options.maxPitch : 80 * (Math.PI / 180);
+
     // Orientation
     this.yaw = options.initialYaw || 0;
-    this.pitch = options.initialPitch !== undefined
-      ? options.initialPitch
-      : (this.isOverhead ? 58 * (Math.PI / 180) : 0.15); // ~58 deg looking down for overhead, ~8.5 deg for shoulder
+    const defaultPitch = this.isOverhead ? 70 * (Math.PI / 180) : 12 * (Math.PI / 180);
+    this.pitch = options.initialPitch !== undefined ? options.initialPitch : defaultPitch;
+    this.targetPitch = null; // Used for smooth overhead view transitions
+    this.savedShoulderPitch = 12 * (Math.PI / 180);
+
     this.sensitivity = options.sensitivity || 0.12; // deg per pixel
 
-    // Limits in radians
-    this.minPitch = this.isOverhead ? 25 * (Math.PI / 180) : -20 * (Math.PI / 180);
-    this.maxPitch = this.isOverhead ? 82 * (Math.PI / 180) : 55 * (Math.PI / 180);
+    // Zoom per stance: stand default 3.0m, crouch 2.4m, sprint 3.4m, overhead 12.0m
+    this.zoomByStance = {
+      stand: options.baseDist || 3.0,
+      crouch: options.crouchDist || 2.4,
+      sprint: options.sprintDist || 3.4,
+      overhead: options.overheadDist || 12.0
+    };
 
-    // Offsets & Distances
+    // Stance distances & limits
+    this.baseDist = this.isOverhead ? this.zoomByStance.overhead : this.zoomByStance.stand;
+    this.crouchDist = this.zoomByStance.crouch;
+    this.sprintDist = this.zoomByStance.sprint;
+    this.minDist = options.minDist || (this.isOverhead ? 1.5 : 0.7);
+    this.minZoom = 1.5;
+    this.maxZoom = 7.0;
+
+    // Right shoulder offset: 0.5m default, scaled down as zoom increases
     this.shoulderOffset = options.shoulderOffset !== undefined
       ? options.shoulderOffset
-      : (this.isOverhead ? 0.0 : 0.5); // Centered over model in overhead mode
-    this.baseDist = this.isOverhead ? 8.5 : 2.6;
-    this.crouchDist = this.isOverhead ? 7.5 : 2.3;
-    this.sprintDist = this.isOverhead ? 9.5 : 2.9;
-    this.minDist = this.isOverhead ? 1.5 : 0.7;
+      : (this.isOverhead ? 0.0 : 0.5);
 
     // Smoothing state
     this.currentPivot = new THREE.Vector3(0, 1.5, 0);
     this.currentDist = this.baseDist;
     this.currentFov = this.camera.fov;
-    this.smoothRate = 14.0; // 14/s
+    this.smoothRate = 14.0; // Pivot follow rate 14/s
+    this.zoomSmoothRate = 10.0; // Exponential zoom rate 10/s
+
+    this.activeStance = 'stand';
 
     // Reusable vectors to avoid allocations
     this._forward = new THREE.Vector3();
@@ -62,27 +77,53 @@ export class ThirdPersonCamera {
     this._rayAABB = { min: [0, 0, 0], max: [0, 0, 0] };
   }
 
+  /**
+   * Smoothly toggles or sets camera mode
+   * @param {'overhead'|'shoulder'} mode
+   */
   setMode(mode) {
-    this.mode = mode;
-    this.isOverhead = (mode === 'overhead');
-    if (this.isOverhead) {
+    if (mode === 'overhead') {
+      if (!this.isOverhead) {
+        this.savedShoulderPitch = this.pitch;
+      }
+      this.mode = 'overhead';
+      this.isOverhead = true;
+      this.baseDist = this.zoomByStance.overhead;
       this.shoulderOffset = 0.0;
-      this.baseDist = 8.5;
-      this.crouchDist = 7.5;
-      this.sprintDist = 9.5;
       this.minDist = 1.5;
-      this.minPitch = 25 * (Math.PI / 180);
-      this.maxPitch = 82 * (Math.PI / 180);
-      this.pitch = Math.max(this.minPitch, Math.min(this.maxPitch, 58 * (Math.PI / 180)));
+      this.targetPitch = 70 * (Math.PI / 180);
     } else {
+      this.mode = 'shoulder';
+      this.isOverhead = false;
+      this.baseDist = this.zoomByStance.stand;
       this.shoulderOffset = 0.5;
-      this.baseDist = 2.6;
-      this.crouchDist = 2.3;
-      this.sprintDist = 2.9;
       this.minDist = 0.7;
-      this.minPitch = -20 * (Math.PI / 180);
-      this.maxPitch = 55 * (Math.PI / 180);
-      this.pitch = Math.max(this.minPitch, Math.min(this.maxPitch, 0.15));
+      this.targetPitch = this.savedShoulderPitch !== undefined
+        ? this.savedShoulderPitch
+        : 12 * (Math.PI / 180);
+    }
+  }
+
+  toggleOverhead() {
+    this.setMode(this.isOverhead ? 'shoulder' : 'overhead');
+  }
+
+  /**
+   * Adjust zoom distance for the currently active stance
+   * @param {number} delta - positive zooms out, negative zooms in
+   */
+  adjustZoom(delta) {
+    const stance = this.isOverhead ? 'overhead' : this.activeStance;
+    if (this.isOverhead) {
+      this.zoomByStance.overhead = Math.max(4.0, Math.min(20.0, this.zoomByStance.overhead + delta));
+      this.baseDist = this.zoomByStance.overhead;
+    } else {
+      const current = this.zoomByStance[stance] || 3.0;
+      const next = Math.max(this.minZoom, Math.min(this.maxZoom, current + delta));
+      this.zoomByStance[stance] = next;
+      if (stance === 'stand') this.baseDist = next;
+      else if (stance === 'crouch') this.crouchDist = next;
+      else if (stance === 'sprint') this.sprintDist = next;
     }
   }
 
@@ -96,7 +137,10 @@ export class ThirdPersonCamera {
     this.yaw -= deltaX * radPerPx;
     this.pitch += deltaY * radPerPx;
 
-    // Clamp pitch
+    // Interrupt any pending smooth mode pitch transition when user looks manually
+    this.targetPitch = null;
+
+    // Clamp pitch between -40 deg and +80 deg
     this.pitch = Math.max(this.minPitch, Math.min(this.maxPitch, this.pitch));
   }
 
@@ -113,48 +157,73 @@ export class ThirdPersonCamera {
    * @param {import('../core/Contracts.js').WorldQuery} worldQuery
    */
   update(dt, playerPos, isCrouching, isSprinting, worldQuery) {
-    const smoothFactor = 1.0 - Math.exp(-this.smoothRate * dt);
+    // Determine active stance
+    if (isCrouching) this.activeStance = 'crouch';
+    else if (isSprinting) this.activeStance = 'sprint';
+    else this.activeStance = 'stand';
 
-    // 1. Target pivot point
+    // 1. Smooth overhead transition if targetPitch is set
+    if (this.targetPitch !== null) {
+      const pitchFactor = 1.0 - Math.exp(-this.zoomSmoothRate * dt);
+      this.pitch += (this.targetPitch - this.pitch) * pitchFactor;
+      if (Math.abs(this.targetPitch - this.pitch) < 0.005) {
+        this.pitch = this.targetPitch;
+        this.targetPitch = null;
+      }
+    }
+
+    // 2. Target pivot point
+    const pivotFactor = 1.0 - Math.exp(-this.smoothRate * dt);
     const targetPivotY = playerPos.y + (isCrouching ? 1.0 : 1.5);
-    this.currentPivot.x += (playerPos.x - this.currentPivot.x) * smoothFactor;
-    this.currentPivot.y += (targetPivotY - this.currentPivot.y) * smoothFactor;
-    this.currentPivot.z += (playerPos.z - this.currentPivot.z) * smoothFactor;
+    this.currentPivot.x += (playerPos.x - this.currentPivot.x) * pivotFactor;
+    this.currentPivot.y += (targetPivotY - this.currentPivot.y) * pivotFactor;
+    this.currentPivot.z += (playerPos.z - this.currentPivot.z) * pivotFactor;
 
-    // 2. Target distance and FOV
-    const targetDist = isCrouching ? this.crouchDist : (isSprinting ? this.sprintDist : this.baseDist);
-    this.currentDist += (targetDist - this.currentDist) * smoothFactor;
+    // 3. Smooth exponential zoom per stance (rate 10/s)
+    const zoomFactor = 1.0 - Math.exp(-this.zoomSmoothRate * dt);
+    const stance = this.isOverhead ? 'overhead' : this.activeStance;
+    const targetDist = this.zoomByStance[stance] || (this.isOverhead ? 12.0 : 3.0);
+    this.currentDist += (targetDist - this.currentDist) * zoomFactor;
 
-    const targetFov = isSprinting ? 66 : 62;
-    if (Math.abs(this.camera.fov - targetFov) > 0.1) {
-      this.currentFov += (targetFov - this.currentFov) * smoothFactor;
+    // 4. Smooth FOV (sprint boost +4)
+    const baseFov = 60;
+    const targetFov = isSprinting ? baseFov + 4 : baseFov;
+    if (Math.abs(this.camera.fov - targetFov) > 0.05) {
+      this.currentFov += (targetFov - this.currentFov) * pivotFactor;
       this.camera.fov = this.currentFov;
       this.camera.updateProjectionMatrix();
     }
 
-    // 3. Compute basis vectors from yaw & pitch
+    // 5. Compute basis vectors from yaw & pitch
     const cosPitch = Math.cos(this.pitch);
     const sinPitch = Math.sin(this.pitch);
     const cosYaw = Math.cos(this.yaw);
     const sinYaw = Math.sin(this.yaw);
 
-    // Forward pointing towards scene
+    // Forward vector pointing from camera to scene target
     this._forward.set(sinYaw * cosPitch, -sinPitch, cosYaw * cosPitch).normalize();
     // Right vector along shoulder
     this._right.set(cosYaw, 0, -sinYaw).normalize();
     // Up vector
     this._up.crossVectors(this._right, this._forward).normalize();
 
-    // 4. Right shoulder offset
+    // 6. Right-shoulder offset: 0.5m scaled down as you zoom out (0 in overhead)
+    if (this.isOverhead) {
+      this.shoulderOffset = 0.0;
+    } else {
+      // 0.5m at dist <= 3.0m, scales linearly to 0.0m at dist >= 7.0m
+      const zoomScale = Math.max(0, Math.min(1.0, (7.0 - this.currentDist) / (7.0 - 3.0)));
+      this.shoulderOffset = 0.5 * zoomScale;
+    }
     this._shoulderPivot.copy(this.currentPivot).addScaledVector(this._right, this.shoulderOffset);
 
-    // 5. Desired camera position
+    // 7. Desired camera position
     this._desiredPos.copy(this._shoulderPivot).addScaledVector(this._forward, -this.currentDist);
 
-    // 6. Camera collision resolution
+    // 8. Camera collision resolution
     let finalDist = this.currentDist;
 
-    // A) Building colliders (Ray-AABB test with 0.2m margin)
+    // A) Building & prop colliders (Ray-AABB test with 0.2m margin, min distance 0.7m)
     if (worldQuery && worldQuery.queryColliders) {
       this._rayAABB.min[0] = Math.min(this._shoulderPivot.x, this._desiredPos.x) - 0.5;
       this._rayAABB.min[1] = Math.min(this._shoulderPivot.y, this._desiredPos.y) - 0.5;
@@ -186,9 +255,13 @@ export class ThirdPersonCamera {
       }
     }
 
-    // B) Terrain height collision (+0.3m clearance)
+    // B) Terrain ground rule: camera must stay >= 0.3m above heightAt at its position.
+    // Sample heightAt along the pivot->camera ray (8 samples).
+    // If violated, shorten the distance (never push under terrain, never jitter).
     if (worldQuery && worldQuery.heightAt) {
       const steps = 8;
+      let firstPenetrationIndex = -1;
+
       for (let s = 1; s <= steps; s++) {
         const frac = s / steps;
         const testDist = finalDist * frac;
@@ -196,21 +269,78 @@ export class ThirdPersonCamera {
         const ty = this._shoulderPivot.y - this._forward.y * testDist;
         const tz = this._shoulderPivot.z - this._forward.z * testDist;
 
-        const terrY = worldQuery.heightAt(tx, tz) + 0.3;
-        if (ty < terrY) {
-          // Camera penetrated ground, pull in
-          finalDist = Math.max(this.minDist, testDist - 0.2);
+        const reqGroundY = worldQuery.heightAt(tx, tz) + 0.3;
+        if (ty < reqGroundY) {
+          firstPenetrationIndex = s;
           break;
         }
+      }
+
+      if (firstPenetrationIndex !== -1) {
+        // Continuous bisection search between safe lower bound and penetrating upper bound
+        let low = finalDist * ((firstPenetrationIndex - 1) / steps);
+        let high = finalDist * (firstPenetrationIndex / steps);
+
+        for (let iter = 0; iter < 6; iter++) {
+          const mid = (low + high) * 0.5;
+          const mx = this._shoulderPivot.x - this._forward.x * mid;
+          const my = this._shoulderPivot.y - this._forward.y * mid;
+          const mz = this._shoulderPivot.z - this._forward.z * mid;
+          const terrY = worldQuery.heightAt(mx, mz) + 0.3;
+
+          if (my < terrY) {
+            high = mid; // Penetrated: pull in distance
+          } else {
+            low = mid; // Safe clearance
+          }
+        }
+        finalDist = Math.max(this.minDist, low);
+      }
+
+      // Final ground clearance verification at camera position
+      const endX = this._shoulderPivot.x - this._forward.x * finalDist;
+      const endY = this._shoulderPivot.y - this._forward.y * finalDist;
+      const endZ = this._shoulderPivot.z - this._forward.z * finalDist;
+      const minEndY = worldQuery.heightAt(endX, endZ) + 0.3;
+
+      if (endY < minEndY) {
+        // Additional shortening pullback to satisfy >= 0.3m ground clearance
+        let low = 0.2;
+        let high = finalDist;
+        for (let iter = 0; iter < 6; iter++) {
+          const mid = (low + high) * 0.5;
+          const mx = this._shoulderPivot.x - this._forward.x * mid;
+          const my = this._shoulderPivot.y - this._forward.y * mid;
+          const mz = this._shoulderPivot.z - this._forward.z * mid;
+          if (my < worldQuery.heightAt(mx, mz) + 0.3) {
+            high = mid;
+          } else {
+            low = mid;
+          }
+        }
+        finalDist = Math.max(0.3, low);
       }
     }
 
     // Position camera at final resolved distance
     this._actualPos.copy(this._shoulderPivot).addScaledVector(this._forward, -finalDist);
+
+    // Absolute terrain floor safeguard: camera is NEVER pushed under terrain
+    if (worldQuery && worldQuery.heightAt) {
+      const terrainFloor = worldQuery.heightAt(this._actualPos.x, this._actualPos.z) + 0.3;
+      if (this._actualPos.y < terrainFloor) {
+        this._actualPos.y = terrainFloor;
+      }
+    }
+
     this.camera.position.copy(this._actualPos);
 
-    // Crosshair stays at screen center by looking along camera forward vector
-    this._lookTarget.copy(this._shoulderPivot).addScaledVector(this._forward, 8.0);
+    // Look target: in overhead mode, look directly at character pivot; in shoulder mode, look along forward vector
+    if (this.isOverhead) {
+      this._lookTarget.copy(this._shoulderPivot);
+    } else {
+      this._lookTarget.copy(this._shoulderPivot).addScaledVector(this._forward, 8.0);
+    }
     this.camera.lookAt(this._lookTarget);
   }
 

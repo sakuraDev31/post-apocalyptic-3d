@@ -4,7 +4,9 @@
  * Multi-touch mobile input controller with keyboard/mouse fallbacks:
  * - Dynamic Left-Half Virtual Joystick (radius 60px, dead zone 0.12)
  * - Right-Half Drag-to-Look with pointerId isolation
- * - Action buttons cluster (>= 64px): JUMP (largest), SPRINT (hold), CROUCH (toggle), INTERACT (placeholder)
+ * - Pinch-to-zoom on right half (two fingers on right half, never joystick pointer)
+ * - Mouse wheel zoom fallback
+ * - Action buttons cluster (>= 64px): JUMP (variable height with jumpHeld tracking), SPRINT, CROUCH, USE
  * - Safe area insets, touch-action: none, contextmenu disabled
  * - Fullscreen & landscape orientation lock helpers
  */
@@ -13,6 +15,7 @@ export class TouchControls {
   constructor(options = {}) {
     this.container = options.container || document.body;
     this.onInteract = options.onInteract || (() => {});
+    this.onZoom = options.onZoom || (() => {});
 
     // State matching InputState contract
     this.inputState = {
@@ -21,6 +24,7 @@ export class TouchControls {
       lookDX: 0,
       lookDY: 0,
       jumpPressed: false,
+      jumpHeld: false,
       sprintHeld: false,
       crouchToggled: false,
       interactPressed: false
@@ -41,6 +45,10 @@ export class TouchControls {
     this.lastLookPos = { x: 0, y: 0 };
 
     this.buttonPointerIds = new Set();
+
+    // Pinch-to-zoom tracking (two fingers on right half)
+    this.rightHalfPointers = new Map(); // pointerId -> { x, y }
+    this.lastPinchDist = null;
 
     // Invert movement options
     this.invertX = options.invertX || false;
@@ -230,22 +238,45 @@ export class TouchControls {
       el.addEventListener('pointercancel', endFn);
     };
 
-    setupButton(this.btnJump, () => { this._jumpEdge = true; });
-    setupButton(this.btnSprint, () => { this.inputState.sprintHeld = true; }, () => { this.inputState.sprintHeld = false; });
+    // JUMP button tracks edge AND continuous held state for variable height
+    setupButton(
+      this.btnJump,
+      () => {
+        this._jumpEdge = true;
+        this.inputState.jumpHeld = true;
+      },
+      () => {
+        this.inputState.jumpHeld = false;
+      }
+    );
+
+    setupButton(
+      this.btnSprint,
+      () => { this.inputState.sprintHeld = true; },
+      () => { this.inputState.sprintHeld = false; }
+    );
     setupButton(this.btnCrouch, () => { this._crouchEdge = true; });
     setupButton(this.btnInteract, () => { this._interactEdge = true; this.onInteract(); });
 
-    // Root pointer listeners for Joystick & Drag Look
+    // Root pointer listeners for Joystick, Drag Look & Pinch Zoom
     this.root.addEventListener('pointerdown', (e) => this._onPointerDown(e));
     window.addEventListener('pointermove', (e) => this._onPointerMove(e));
     window.addEventListener('pointerup', (e) => this._onPointerUp(e));
     window.addEventListener('pointercancel', (e) => this._onPointerUp(e));
+
+    // Mouse wheel zoom
+    window.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const delta = e.deltaY > 0 ? 0.4 : -0.4;
+      this.onZoom(delta);
+    }, { passive: false });
 
     // Keyboard Fallbacks
     window.addEventListener('keydown', (e) => {
       this.keysPressed[e.code] = true;
       if (e.code === 'Space') {
         this._jumpEdge = true;
+        this.inputState.jumpHeld = true;
       }
       if (e.code === 'KeyC') {
         this._crouchEdge = true;
@@ -261,6 +292,9 @@ export class TouchControls {
 
     window.addEventListener('keyup', (e) => {
       this.keysPressed[e.code] = false;
+      if (e.code === 'Space') {
+        this.inputState.jumpHeld = false;
+      }
       if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
         this.inputState.sprintHeld = false;
       }
@@ -304,10 +338,21 @@ export class TouchControls {
       this.joyThumb.style.transform = 'translate(0px, 0px)';
       this.inputState.moveX = 0;
       this.inputState.moveY = 0;
-    } else if (!isLeftHalf && this.lookPointerId === null) {
-      // Activate drag look
-      this.lookPointerId = e.pointerId;
-      this.lastLookPos = { x: e.clientX, y: e.clientY };
+    } else if (!isLeftHalf) {
+      // Track pointer on right half (for drag-look or pinch-to-zoom)
+      this.rightHalfPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+      if (this.rightHalfPointers.size === 1) {
+        // Single finger: look drag
+        this.lookPointerId = e.pointerId;
+        this.lastLookPos = { x: e.clientX, y: e.clientY };
+        this.lastPinchDist = null;
+      } else if (this.rightHalfPointers.size === 2) {
+        // Two fingers on right half: initialize pinch zoom
+        this.lookPointerId = null; // suspend look drag during pinch
+        const pts = Array.from(this.rightHalfPointers.values());
+        this.lastPinchDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      }
     }
   }
 
@@ -330,12 +375,7 @@ export class TouchControls {
       const normDist = clampedDist / maxR;
       if (normDist > this.joystickDeadZone) {
         const effectiveMag = (normDist - this.joystickDeadZone) / (1 - this.joystickDeadZone);
-        // Correct screen-relative mapping:
-        // Pushing joystick right (angle=0, cos>0) moves right on screen (towards -X in world space)
-        // Pushing joystick left (angle=PI, cos<0) moves left on screen (towards +X in world space)
-        // Pushing joystick up (angle=-PI/2, -sin>0) moves forward / up on screen (towards +Z in world space)
-        // Pushing joystick down (angle=PI/2, -sin<0) moves backward / down on screen (towards -Z in world space)
-        const signX = this.invertX ? 1 : -1;
+        const signX = this.invertX ? -1 : 1;
         const signY = this.invertY ? -1 : 1;
         this.inputState.moveX = signX * Math.cos(angle) * effectiveMag;
         this.inputState.moveY = signY * -Math.sin(angle) * effectiveMag;
@@ -345,13 +385,30 @@ export class TouchControls {
       }
     }
 
-    // Look move
-    if (e.pointerId === this.lookPointerId) {
-      const dx = e.clientX - this.lastLookPos.x;
-      const dy = e.clientY - this.lastLookPos.y;
-      this.inputState.lookDX += dx;
-      this.inputState.lookDY += dy;
-      this.lastLookPos = { x: e.clientX, y: e.clientY };
+    // Right half touch movement (look or pinch)
+    if (this.rightHalfPointers.has(e.pointerId)) {
+      this.rightHalfPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+      if (this.rightHalfPointers.size >= 2) {
+        // Two-finger pinch on right half
+        const pts = Array.from(this.rightHalfPointers.values());
+        const currentDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+
+        if (this.lastPinchDist !== null) {
+          const delta = currentDist - this.lastPinchDist;
+          // Pinch apart (>0) zooms in (decrease distance); pinch together (<0) zooms out (increase distance)
+          const zoomDelta = -delta * 0.015;
+          this.onZoom(zoomDelta);
+        }
+        this.lastPinchDist = currentDist;
+      } else if (e.pointerId === this.lookPointerId) {
+        // Single finger look drag
+        const dx = e.clientX - this.lastLookPos.x;
+        const dy = e.clientY - this.lastLookPos.y;
+        this.inputState.lookDX += dx;
+        this.inputState.lookDY += dy;
+        this.lastLookPos = { x: e.clientX, y: e.clientY };
+      }
     }
   }
 
@@ -362,9 +419,40 @@ export class TouchControls {
       this.inputState.moveX = 0;
       this.inputState.moveY = 0;
     }
-    if (e.pointerId === this.lookPointerId) {
-      this.lookPointerId = null;
+
+    if (this.rightHalfPointers.has(e.pointerId)) {
+      this.rightHalfPointers.delete(e.pointerId);
+      this.lastPinchDist = null;
+
+      if (this.rightHalfPointers.size === 1) {
+        // Drop back to single-finger look drag for the remaining pointer
+        const [remainingId, pos] = this.rightHalfPointers.entries().next().value;
+        this.lookPointerId = remainingId;
+        this.lastLookPos = { x: pos.x, y: pos.y };
+      } else if (this.rightHalfPointers.size === 0) {
+        this.lookPointerId = null;
+      }
     }
+  }
+
+  reset() {
+    this.joystickPointerId = null;
+    if (this.joyBase) this.joyBase.style.display = 'none';
+    this.lookPointerId = null;
+    this.rightHalfPointers.clear();
+    this.lastPinchDist = null;
+    this.inputState.moveX = 0;
+    this.inputState.moveY = 0;
+    this.inputState.lookDX = 0;
+    this.inputState.lookDY = 0;
+    this.inputState.jumpPressed = false;
+    this.inputState.jumpHeld = false;
+    this.inputState.sprintHeld = false;
+    this.inputState.crouchToggled = false;
+    this.inputState.interactPressed = false;
+    this._jumpEdge = false;
+    this._crouchEdge = false;
+    this._interactEdge = false;
   }
 
   setInvert(invertX, invertY) {
@@ -388,8 +476,8 @@ export class TouchControls {
       const signX = this.invertX ? -1 : 1;
       if (this.keysPressed['KeyW'] || this.keysPressed['ArrowUp']) ky += signY;
       if (this.keysPressed['KeyS'] || this.keysPressed['ArrowDown']) ky -= signY;
-      if (this.keysPressed['KeyA'] || this.keysPressed['ArrowLeft']) kx += signX; // Left on screen (+X world)
-      if (this.keysPressed['KeyD'] || this.keysPressed['ArrowRight']) kx -= signX; // Right on screen (-X world)
+      if (this.keysPressed['KeyA'] || this.keysPressed['ArrowLeft']) kx -= signX; // Left
+      if (this.keysPressed['KeyD'] || this.keysPressed['ArrowRight']) kx += signX; // Right
 
       if (kx !== 0 || ky !== 0) {
         const len = Math.hypot(kx, ky);
@@ -404,6 +492,7 @@ export class TouchControls {
       lookDX: this.inputState.lookDX,
       lookDY: this.inputState.lookDY,
       jumpPressed: this._jumpEdge,
+      jumpHeld: this.inputState.jumpHeld,
       sprintHeld: this.inputState.sprintHeld,
       crouchToggled: this._crouchEdge,
       interactPressed: this._interactEdge

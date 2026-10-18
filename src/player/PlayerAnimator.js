@@ -1,11 +1,13 @@
 /**
  * PlayerAnimator.js
  * 
- * Procedural animation system for Scavenger Humanoid.
- * - States: idle, walk, run, sprint, crouchIdle, crouchWalk, jumpUp, fall, land
+ * Procedural animation system for Scavenger Humanoid:
+ * - States: idle, walk, run, sprint, crouchIdle, crouchWalk, jumpAnticipation, jumpTuck, fall, landAbsorb
+ * - Jump animation: 0.08s anticipation crouch, clean tuck in air, landing absorb scaled by fall speed
+ * - Model faces +Z: positive hip rotation.x swings leg backward, negative swings forward
+ * - Crouch pose: thighs and knees forward, torso leaning slightly forward, no foot floating or sinking
  * - Distance-traveled driven walk cycle (no foot sliding)
- * - Exponential smoothing between all state poses (no pops)
- * - Squash & stretch landing impulse (0.1s duration)
+ * - Exponential smoothing between all state poses (rate 16/s prevents pops)
  */
 
 export class PlayerAnimator {
@@ -20,11 +22,13 @@ export class PlayerAnimator {
       'hipL', 'hipR', 'kneeL', 'kneeR'
     ];
 
-    playerModel.traverse((node) => {
-      if (jointNames.includes(node.name)) {
-        this.joints[node.name] = node;
-      }
-    });
+    if (playerModel) {
+      playerModel.traverse((node) => {
+        if (jointNames.includes(node.name)) {
+          this.joints[node.name] = node;
+        }
+      });
+    }
 
     // Initial joint base transforms
     this.baseHipsY = this.joints.hips ? this.joints.hips.position.y : 0.95;
@@ -33,7 +37,11 @@ export class PlayerAnimator {
     this.walkPhase = 0;
     this.breathTime = 0;
     this.landSquashTimer = 0;
+    this.landSquashDuration = 0.1;
+    this.landSquashMagnitude = 0.12;
+    this.anticipationTimer = 0;
     this.wasGrounded = true;
+    this.wasJumping = false;
 
     // Smoothed state properties
     this.current = {
@@ -57,16 +65,22 @@ export class PlayerAnimator {
   }
 
   /**
-   * Triggers landing impact squash
+   * Triggers landing impact squash scaled by fall speed
+   * @param {number} fallSpeed - downward velocity at contact in m/s
    */
-  triggerLand() {
-    this.landSquashTimer = 0.1; // 100ms squash
+  triggerLand(fallSpeed = 6.0) {
+    const normSpeed = Math.min(14.0, Math.max(1.5, Math.abs(fallSpeed)));
+    // Squash magnitude: 0.08m (gentle drop) to 0.22m (heavy fall)
+    this.landSquashMagnitude = 0.08 + (normSpeed / 14.0) * 0.14;
+    // Absorb duration: 0.09s to 0.16s
+    this.landSquashDuration = 0.09 + (normSpeed / 14.0) * 0.07;
+    this.landSquashTimer = this.landSquashDuration;
   }
 
   /**
    * Updates procedural animation pose
    * @param {number} dt - delta time in seconds
-   * @param {Object} state - { speed, isGrounded, isJumping, isFalling, isCrouching, isSprinting }
+   * @param {Object} state - { speed, isGrounded, isJumping, isFalling, isCrouching, isSprinting, justLanded, fallSpeed }
    */
   update(dt, state = {}) {
     const {
@@ -75,19 +89,30 @@ export class PlayerAnimator {
       isJumping = false,
       isFalling = false,
       isCrouching = false,
-      isSprinting = false
+      isSprinting = false,
+      justLanded = false,
+      fallSpeed = 6.0
     } = state;
 
     // Landing detection
-    if (!this.wasGrounded && isGrounded) {
-      this.triggerLand();
+    if ((!this.wasGrounded && isGrounded) || justLanded) {
+      this.triggerLand(fallSpeed);
     }
     this.wasGrounded = isGrounded;
+
+    // Jump anticipation detection (0.08s anticipation crouch)
+    if (isJumping && !this.wasJumping) {
+      this.anticipationTimer = 0.08;
+    }
+    this.wasJumping = isJumping;
 
     // Timers
     this.breathTime += dt * 2.2;
     if (this.landSquashTimer > 0) {
       this.landSquashTimer = Math.max(0, this.landSquashTimer - dt);
+    }
+    if (this.anticipationTimer > 0) {
+      this.anticipationTimer = Math.max(0, this.anticipationTimer - dt);
     }
 
     // Determine motion sub-state
@@ -118,67 +143,91 @@ export class PlayerAnimator {
     let targetKneeBendL = 0;
     let targetKneeBendR = 0;
 
-    // 1. Landing squash impulse
-    if (this.landSquashTimer > 0) {
-      const squashNorm = this.landSquashTimer / 0.1;
-      targetRootSquashY = -0.12 * Math.sin(squashNorm * Math.PI);
+    // 1. Landing squash absorb impulse scaled by fall speed
+    if (this.landSquashTimer > 0 && this.landSquashDuration > 0) {
+      const squashNorm = this.landSquashTimer / this.landSquashDuration;
+      const absorbFactor = Math.sin(squashNorm * Math.PI);
+      targetRootSquashY = -this.landSquashMagnitude * absorbFactor;
+      targetKneeBendL += (this.landSquashMagnitude * 2.2) * absorbFactor;
+      targetKneeBendR += (this.landSquashMagnitude * 2.2) * absorbFactor;
+      targetSpineLeanX += (this.landSquashMagnitude * 1.2) * absorbFactor;
     }
 
     // 2. Air states: Jump Up / Fall
     if (!isGrounded) {
-      if (isJumping) {
-        // Jump ascent
-        targetSpineLeanX = -0.08;
-        targetArmSwingL = -0.5;
-        targetArmSwingR = -0.5;
-        targetElbowL = -0.6;
-        targetElbowR = -0.6;
-        targetLegSwingL = 0.35;
-        targetLegSwingR = 0.25;
-        targetKneeBendL = 0.55;
-        targetKneeBendR = 0.45;
+      if (this.anticipationTimer > 0) {
+        // 0.08s anticipation crouch: slight hip dip and knee bend before launch
+        targetHipsY = this.baseHipsY - 0.16;
+        targetSpineLeanX = 0.18;
+        targetArmSwingL = 0.3;
+        targetArmSwingR = 0.3;
+        targetLegSwingL = -0.38; // Thigh forward
+        targetLegSwingR = -0.38;
+        targetKneeBendL = 0.80; // Shin back
+        targetKneeBendR = 0.80;
+      } else if (isJumping) {
+        // Clean tuck in air: thighs swing forward (-X) and knees tuck tightly
+        targetHipsY = this.baseHipsY - 0.12;
+        targetSpineLeanX = 0.12;
+        targetArmSwingL = -0.45;
+        targetArmSwingR = -0.45;
+        targetElbowL = -0.65;
+        targetElbowR = -0.65;
+        // Negative X swings leg FORWARD
+        targetLegSwingL = -0.70;
+        targetLegSwingR = -0.60;
+        targetKneeBendL = 1.25;
+        targetKneeBendR = 1.15;
       } else {
-        // Falling (arms out for balance)
-        targetSpineLeanX = 0.05;
-        targetArmOutL = -0.65;
-        targetArmOutR = 0.65;
-        targetArmSwingL = 0.1;
-        targetArmSwingR = 0.1;
-        targetElbowL = -0.4;
-        targetElbowR = -0.4;
-        targetLegSwingL = -0.15;
-        targetLegSwingR = -0.15;
-        targetKneeBendL = 0.2;
-        targetKneeBendR = 0.2;
+        // Falling (arms out for balance, legs extending towards ground)
+        targetSpineLeanX = 0.06;
+        targetArmOutL = -0.60;
+        targetArmOutR = 0.60;
+        targetArmSwingL = 0.12;
+        targetArmSwingR = 0.12;
+        targetElbowL = -0.35;
+        targetElbowR = -0.35;
+        targetLegSwingL = -0.22;
+        targetLegSwingR = -0.22;
+        targetKneeBendL = 0.35;
+        targetKneeBendR = 0.35;
       }
     } else if (isCrouching) {
       // 3. Crouch states
-      targetHipsY = this.baseHipsY - 0.35;
-      targetSpineLeanX = 0.22;
-      targetHeadPitchX = -0.18; // head looks up
+      // Thighs and knees forward, torso leaning slightly forward, no foot floating or sinking
+      targetHipsY = this.baseHipsY - 0.36; // Lower hips to 0.59m
+      targetSpineLeanX = 0.22; // Torso leaning slightly forward
+      targetChestLeanX = 0.08;
+      targetHeadPitchX = -0.20; // Head looks forward/up to compensate for spine lean
 
       if (!isMoving) {
-        // Crouch Idle
-        targetLegSwingL = 0.45;
-        targetLegSwingR = 0.45;
-        targetKneeBendL = 0.85;
-        targetKneeBendR = 0.85;
-        targetElbowL = -0.7;
-        targetElbowR = -0.7;
+        // Crouch Idle:
+        // Negative hip rotation.x swings thighs FORWARD (+Z)
+        // Positive knee rotation.x bends shins BACKWARD (-Z) to place feet flat on ground at y=0
+        targetLegSwingL = -0.75;
+        targetLegSwingR = -0.75;
+        targetKneeBendL = 1.55;
+        targetKneeBendR = 1.55;
+        targetArmSwingL = -0.20;
+        targetArmSwingR = -0.20;
+        targetElbowL = -0.55;
+        targetElbowR = -0.55;
       } else {
-        // Crouch Walk (low shuffle)
+        // Crouch Walk (low athletic shuffle):
         const cSin = Math.sin(this.walkPhase);
-        targetLegSwingL = 0.45 + cSin * 0.25;
-        targetLegSwingR = 0.45 - cSin * 0.25;
-        targetKneeBendL = 0.85 + Math.max(0, -cSin) * 0.3;
-        targetKneeBendR = 0.85 + Math.max(0, cSin) * 0.3;
-        targetArmSwingL = -cSin * 0.2;
-        targetArmSwingR = cSin * 0.2;
+        // Thighs forward with alternating shuffle swing
+        targetLegSwingL = -0.75 - cSin * 0.22;
+        targetLegSwingR = -0.75 + cSin * 0.22;
+        targetKneeBendL = 1.55 + Math.max(0, -cSin) * 0.25;
+        targetKneeBendR = 1.55 + Math.max(0, cSin) * 0.25;
+        targetArmSwingL = -0.20 - cSin * 0.25;
+        targetArmSwingR = -0.20 + cSin * 0.25;
+        targetElbowL = -0.55;
+        targetElbowR = -0.55;
       }
     } else if (isMoving) {
       // 4. Locomotion: Walk / Run / Sprint
       const sinWalk = Math.sin(this.walkPhase);
-      const cosWalk = Math.cos(this.walkPhase);
 
       if (isSprinting) {
         // Sprint (aggressive forward lean, high knee drive)
@@ -186,27 +235,28 @@ export class PlayerAnimator {
         targetChestLeanX = 0.10;
         targetSpineTwistY = -sinWalk * 0.15;
 
-        targetLegSwingL = sinWalk * 0.75;
-        targetLegSwingR = -sinWalk * 0.75;
-        targetKneeBendL = Math.max(0, -sinWalk) * 1.1;
-        targetKneeBendR = Math.max(0, sinWalk) * 1.1;
+        // Negative rotation swings leg forward
+        targetLegSwingL = -sinWalk * 0.75;
+        targetLegSwingR = sinWalk * 0.75;
+        targetKneeBendL = Math.max(0, sinWalk) * 1.1;
+        targetKneeBendR = Math.max(0, -sinWalk) * 1.1;
 
-        targetArmSwingL = -sinWalk * 0.9;
-        targetArmSwingR = sinWalk * 0.9;
-        targetElbowL = -0.8 - Math.max(0, sinWalk) * 0.4;
-        targetElbowR = -0.8 - Math.max(0, -sinWalk) * 0.4;
+        targetArmSwingL = sinWalk * 0.9;
+        targetArmSwingR = -sinWalk * 0.9;
+        targetElbowL = -0.8 - Math.max(0, -sinWalk) * 0.4;
+        targetElbowR = -0.8 - Math.max(0, sinWalk) * 0.4;
       } else if (isRunning) {
         // Run (moderate lean)
         targetSpineLeanX = 0.14;
         targetSpineTwistY = -sinWalk * 0.08;
 
-        targetLegSwingL = sinWalk * 0.58;
-        targetLegSwingR = -sinWalk * 0.58;
-        targetKneeBendL = Math.max(0, -sinWalk) * 0.85;
-        targetKneeBendR = Math.max(0, sinWalk) * 0.85;
+        targetLegSwingL = -sinWalk * 0.58;
+        targetLegSwingR = sinWalk * 0.58;
+        targetKneeBendL = Math.max(0, sinWalk) * 0.85;
+        targetKneeBendR = Math.max(0, -sinWalk) * 0.85;
 
-        targetArmSwingL = -sinWalk * 0.65;
-        targetArmSwingR = sinWalk * 0.65;
+        targetArmSwingL = sinWalk * 0.65;
+        targetArmSwingR = -sinWalk * 0.65;
         targetElbowL = -0.55;
         targetElbowR = -0.55;
       } else {
@@ -214,13 +264,13 @@ export class PlayerAnimator {
         targetSpineLeanX = 0.04;
         targetSpineTwistY = -sinWalk * 0.04;
 
-        targetLegSwingL = sinWalk * 0.42;
-        targetLegSwingR = -sinWalk * 0.42;
-        targetKneeBendL = Math.max(0, -sinWalk) * 0.6;
-        targetKneeBendR = Math.max(0, sinWalk) * 0.6;
+        targetLegSwingL = -sinWalk * 0.42;
+        targetLegSwingR = sinWalk * 0.42;
+        targetKneeBendL = Math.max(0, sinWalk) * 0.6;
+        targetKneeBendR = Math.max(0, -sinWalk) * 0.6;
 
-        targetArmSwingL = -sinWalk * 0.45;
-        targetArmSwingR = sinWalk * 0.45;
+        targetArmSwingL = sinWalk * 0.45;
+        targetArmSwingR = -sinWalk * 0.45;
         targetElbowL = -0.3;
         targetElbowR = -0.3;
       }

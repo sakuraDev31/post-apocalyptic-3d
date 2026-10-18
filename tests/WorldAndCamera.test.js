@@ -50,21 +50,20 @@ test('ThirdPersonCamera PUBG/COD framing, pitch clamp, and collision pullback', 
   assert.strictEqual(tpCam.camera.fov, 62);
   assert.strictEqual(tpCam.shoulderOffset, 0.5);
 
-  // 1. Pitch clamp limits: -20 deg to +55 deg
+  // 1. Pitch clamp limits: -40 deg to +80 deg
   tpCam.handleLook(0, 1000); // extreme drag down (looking up)
-  assert.ok(tpCam.pitch <= 55 * (Math.PI / 180) + 1e-4);
+  assert.ok(tpCam.pitch <= 80 * (Math.PI / 180) + 1e-4);
 
   tpCam.handleLook(0, -2000); // extreme drag up (looking down)
-  assert.ok(tpCam.pitch >= -20 * (Math.PI / 180) - 1e-4);
+  assert.ok(tpCam.pitch >= -40 * (Math.PI / 180) - 1e-4);
 
-  // 2. Framing calculation: standing idle player occupies 45-60% of vertical screen
-  // Player is 1.8m tall, camera distance ~2.6m, vertical FOV 62 deg
-  const vertFovRad = 62 * (Math.PI / 180);
-  const frustumHeightAtDist = 2 * 2.6 * Math.tan(vertFovRad / 2);
+  // 2. Framing calculation: standing idle player occupies 45-55% of vertical screen at default zoom (3.0m, FOV 60)
+  const vertFovRad = 60 * (Math.PI / 180);
+  const frustumHeightAtDist = 2 * 3.0 * Math.tan(vertFovRad / 2);
   const playerScreenPct = (1.8 / frustumHeightAtDist) * 100;
   assert.ok(
-    playerScreenPct >= 45 && playerScreenPct <= 60,
-    `Player framing percentage (${playerScreenPct.toFixed(1)}%) must occupy 45-60% of screen height`
+    playerScreenPct >= 45 && playerScreenPct <= 55,
+    `Player framing percentage (${playerScreenPct.toFixed(1)}%) must occupy 45-55% of screen height`
   );
 
   // 3. Camera collision pullback test
@@ -171,25 +170,25 @@ test('CollisionWorld spatial hash registers, queries, and unloads colliders with
 });
 
 test('ThirdPersonCamera overhead mode framing, centering, and mode toggle', () => {
-  const camera = new THREE.PerspectiveCamera(62, 16 / 9, 0.1, 400);
+  const camera = new THREE.PerspectiveCamera(60, 16 / 9, 0.1, 400);
   const overheadCam = new ThirdPersonCamera(camera, { mode: 'overhead' });
 
   // Centered directly over the character
   assert.strictEqual(overheadCam.shoulderOffset, 0.0, 'Overhead camera must be centered with zero shoulder offset');
-  assert.strictEqual(overheadCam.baseDist, 8.5, 'Overhead camera distance should provide clear tactical visibility (~8.5m)');
-  assert.ok(overheadCam.pitch >= 50 * (Math.PI / 180), 'Overhead camera pitch should look down from above (>=50 deg)');
+  assert.strictEqual(overheadCam.baseDist, 12.0, 'Overhead camera distance should provide clear tactical visibility (12m)');
+  assert.ok(overheadCam.pitch >= 65 * (Math.PI / 180), 'Overhead camera pitch should look down from above (~70 deg)');
   assert.strictEqual(overheadCam.mode, 'overhead');
 
   // Test toggling to shoulder mode
   overheadCam.setMode('shoulder');
   assert.strictEqual(overheadCam.shoulderOffset, 0.5);
-  assert.strictEqual(overheadCam.baseDist, 2.6);
+  assert.strictEqual(overheadCam.baseDist, 3.0);
   assert.strictEqual(overheadCam.mode, 'shoulder');
 
   // Test toggling back to overhead mode
   overheadCam.setMode('overhead');
   assert.strictEqual(overheadCam.shoulderOffset, 0.0);
-  assert.strictEqual(overheadCam.baseDist, 8.5);
+  assert.strictEqual(overheadCam.baseDist, 12.0);
   assert.strictEqual(overheadCam.mode, 'overhead');
 });
 

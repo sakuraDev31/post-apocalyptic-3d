@@ -22,12 +22,25 @@ export class GameHUD {
     this.onBrightnessChange = options.onBrightnessChange || (() => {});
     this.onCameraModeToggle = options.onCameraModeToggle || (() => {});
     this.onInvertToggle = options.onInvertToggle || (() => {});
+    this.onZoom = options.onZoom || (() => {});
 
     this.isPaused = false;
     this.showTelemetry = false;
     this.sensitivity = options.sensitivity || 0.12;
     this.quality = options.quality || 'medium';
-    this.brightness = options.brightness !== undefined ? options.brightness : 1.25;
+
+    let storedBrightness = null;
+    try {
+      const saved = localStorage.getItem('game_brightness');
+      if (saved !== null) {
+        const parsed = parseFloat(saved);
+        if (!isNaN(parsed) && parsed >= 0.5 && parsed <= 2.5) {
+          storedBrightness = parsed;
+        }
+      }
+    } catch (e) {}
+
+    this.brightness = storedBrightness !== null ? storedBrightness : (options.brightness !== undefined ? options.brightness : 1.25);
     this.cameraMode = options.cameraMode || 'overhead';
     this.invertJoystick = false;
 
@@ -90,6 +103,34 @@ export class GameHUD {
     this.minimapCanvas.height = 96;
     this.minimapCtx = this.minimapCanvas.getContext('2d');
     this.topRight.appendChild(this.minimapCanvas);
+
+    // Small [+] [-] Zoom Buttons near Minimap
+    this.zoomGroup = document.createElement('div');
+    this.zoomGroup.className = 'hud-zoom-group';
+
+    this.zoomInBtn = document.createElement('button');
+    this.zoomInBtn.type = 'button';
+    this.zoomInBtn.className = 'hud-zoom-btn hud-zoom-in';
+    this.zoomInBtn.textContent = '+';
+    this.zoomInBtn.title = 'Zoom In';
+    this.zoomInBtn.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+      this.onZoom(-0.5);
+    });
+
+    this.zoomOutBtn = document.createElement('button');
+    this.zoomOutBtn.type = 'button';
+    this.zoomOutBtn.className = 'hud-zoom-btn hud-zoom-out';
+    this.zoomOutBtn.textContent = '−';
+    this.zoomOutBtn.title = 'Zoom Out';
+    this.zoomOutBtn.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+      this.onZoom(0.5);
+    });
+
+    this.zoomGroup.appendChild(this.zoomInBtn);
+    this.zoomGroup.appendChild(this.zoomOutBtn);
+    this.topRight.appendChild(this.zoomGroup);
 
     // Quick Camera Mode Toggle Button
     this.camToggleBtn = document.createElement('button');
@@ -312,6 +353,33 @@ export class GameHUD {
         background: rgba(14, 16, 20, 0.75);
         box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
       }
+      .hud-zoom-group {
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+        justify-content: center;
+      }
+      .hud-zoom-btn {
+        width: 28px;
+        height: 28px;
+        border-radius: 6px;
+        background: rgba(14, 16, 20, 0.78);
+        border: 1px solid rgba(232, 163, 61, 0.5);
+        color: #e8a33d;
+        font-family: monospace;
+        font-size: 16px;
+        font-weight: bold;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        user-select: none;
+        touch-action: none;
+      }
+      .hud-zoom-btn:active {
+        background: rgba(232, 163, 61, 0.35);
+        transform: scale(0.92);
+      }
       .hud-pause-btn {
         width: 40px;
         height: 40px;
@@ -500,39 +568,49 @@ export class GameHUD {
 
     const slider = this.pauseModal.querySelector('#sens-slider');
     const sensVal = this.pauseModal.querySelector('#sens-val');
-    slider.addEventListener('input', (e) => {
-      this.sensitivity = parseFloat(e.target.value);
-      sensVal.textContent = this.sensitivity.toFixed(2);
-      this.onSensitivityChange(this.sensitivity);
-    });
+    if (slider) {
+      slider.addEventListener('input', (e) => {
+        this.sensitivity = parseFloat(e.target.value);
+        if (sensVal) sensVal.textContent = this.sensitivity.toFixed(2);
+        this.onSensitivityChange(this.sensitivity);
+      });
+    }
 
     const qBtns = this.pauseModal.querySelectorAll('.q-btn');
-    qBtns.forEach((btn) => {
-      btn.addEventListener('click', () => {
-        qBtns.forEach((b) => b.classList.remove('active'));
-        btn.classList.add('active');
-        this.quality = btn.getAttribute('data-q');
-        this.onQualityChange(this.quality);
+    if (qBtns) {
+      qBtns.forEach((btn) => {
+        btn.addEventListener('click', () => {
+          qBtns.forEach((b) => b.classList.remove('active'));
+          btn.classList.add('active');
+          this.quality = btn.getAttribute('data-q');
+          this.onQualityChange(this.quality);
+        });
       });
-    });
+    }
 
     const telCheck = this.pauseModal.querySelector('#tel-check');
-    telCheck.addEventListener('change', (e) => {
-      this.showTelemetry = e.target.checked;
-      this.telemetry.style.display = this.showTelemetry ? 'flex' : 'none';
-    });
+    if (telCheck) {
+      telCheck.addEventListener('change', (e) => {
+        this.showTelemetry = e.target.checked;
+        if (this.telemetry) this.telemetry.style.display = this.showTelemetry ? 'flex' : 'none';
+      });
+    }
 
     const resumeBtn = this.pauseModal.querySelector('#pause-resume-btn');
-    resumeBtn.addEventListener('click', () => {
-      this.setPaused(false);
-      this.onResume();
-    });
+    if (resumeBtn) {
+      resumeBtn.addEventListener('click', () => {
+        this.setPaused(false);
+        this.onResume();
+      });
+    }
 
     const menuBtn = this.pauseModal.querySelector('#pause-menu-btn');
-    menuBtn.addEventListener('click', () => {
-      this.setPaused(false);
-      this.onBackToMenu();
-    });
+    if (menuBtn) {
+      menuBtn.addEventListener('click', () => {
+        this.setPaused(false);
+        this.onBackToMenu();
+      });
+    }
   }
 
   toggleCameraMode() {
@@ -561,10 +639,10 @@ export class GameHUD {
   }
 
   cycleBrightness() {
-    const steps = [1.0, 1.3, 1.6, 2.0];
+    const steps = [0.75, 1.0, 1.25, 1.5];
     let nextIdx = 0;
     for (let i = 0; i < steps.length; i++) {
-      if (this.brightness >= steps[i] - 0.05 && this.brightness < steps[i] + 0.05) {
+      if (Math.abs(this.brightness - steps[i]) < 0.08) {
         nextIdx = (i + 1) % steps.length;
         break;
       }
@@ -575,11 +653,17 @@ export class GameHUD {
 
   setBrightness(factor) {
     this.brightness = Math.max(0.5, Math.min(2.5, factor));
+    try {
+      localStorage.setItem('game_brightness', this.brightness.toString());
+    } catch (e) {
+      // localStorage may fail in some sandboxed/node environments
+    }
+
     if (this.brightBtn) {
       this.brightBtn.textContent = `☀️ ${(this.brightness * 100).toFixed(0)}%`;
     }
-    const brightSlider = this.pauseModal.querySelector('#bright-slider');
-    const brightVal = this.pauseModal.querySelector('#bright-val');
+    const brightSlider = this.pauseModal ? this.pauseModal.querySelector('#bright-slider') : null;
+    const brightVal = this.pauseModal ? this.pauseModal.querySelector('#bright-val') : null;
     if (brightSlider) brightSlider.value = this.brightness;
     if (brightVal) brightVal.textContent = `${(this.brightness * 100).toFixed(0)}%`;
     this.onBrightnessChange(this.brightness);
