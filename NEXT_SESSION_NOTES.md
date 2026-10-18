@@ -13,7 +13,8 @@
 - **Current Completion Status**:
   - **Phase 1 (Procedural 3D Asset Studio)**: 100% Complete & Verified.
   - **Phase 2 (Playable World & Scavenger Player)**: 100% Complete & Verified.
-  - **Phase 3A (Controls, Camera Overhaul, Jump/Crouch Physics & HUD)**: 100% Complete & Verified (40/40 tests passing, APK built & deployed).
+  - **Phase 3A (Controls, Camera Overhaul, Jump/Crouch Physics & HUD)**: 100% Complete & Verified (46/46 tests passing, APK built & deployed).
+  - **Godot 4 Core Engine Port (`godot/`)**: Complete & Verified (v4.7.2 stable termux, CharacterBody3D physics, Cel-shading / Radiation shaders, Mobile touch HUD, Genshin City GLB imported).
   - **Next Up**: Phase 3B (Scavenging Mechanics, Loot Spawns & Inventory Economy).
 
 ---
