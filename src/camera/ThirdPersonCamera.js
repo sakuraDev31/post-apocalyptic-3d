@@ -74,6 +74,7 @@ export class ThirdPersonCamera {
     this._desiredPos = new THREE.Vector3();
     this._actualPos = new THREE.Vector3();
     this._lookTarget = new THREE.Vector3();
+    this._backDir = new THREE.Vector3();
     this._rayAABB = { min: [0, 0, 0], max: [0, 0, 0] };
   }
 
@@ -204,8 +205,8 @@ export class ThirdPersonCamera {
     this._forward.set(sinYaw * cosPitch, -sinPitch, cosYaw * cosPitch).normalize();
     // Right vector along shoulder
     this._right.set(cosYaw, 0, -sinYaw).normalize();
-    // Up vector
-    this._up.crossVectors(this._right, this._forward).normalize();
+    // Up vector: forward x right gives true up (+Y when looking horizontally)
+    this._up.crossVectors(this._forward, this._right).normalize();
 
     // 6. Right-shoulder offset: 0.5m scaled down as you zoom out (0 in overhead)
     if (this.isOverhead) {
@@ -237,7 +238,8 @@ export class ThirdPersonCamera {
       if (colliders && colliders.length > 0) {
         const margin = 0.2;
         const origin = this._shoulderPivot;
-        const dir = this._forward.clone().negate(); // Vector pointing back to camera
+        this._backDir.copy(this._forward).negate(); // Vector pointing back to camera (no allocations)
+        const dir = this._backDir;
 
         for (let i = 0; i < colliders.length; i++) {
           const col = colliders[i];
@@ -281,7 +283,7 @@ export class ThirdPersonCamera {
         let low = finalDist * ((firstPenetrationIndex - 1) / steps);
         let high = finalDist * (firstPenetrationIndex / steps);
 
-        for (let iter = 0; iter < 6; iter++) {
+        for (let iter = 0; iter < 10; iter++) {
           const mid = (low + high) * 0.5;
           const mx = this._shoulderPivot.x - this._forward.x * mid;
           const my = this._shoulderPivot.y - this._forward.y * mid;
@@ -294,20 +296,20 @@ export class ThirdPersonCamera {
             low = mid; // Safe clearance
           }
         }
-        finalDist = Math.max(this.minDist, low);
+        finalDist = Math.max(0.05, low);
       }
 
-      // Final ground clearance verification at camera position
+      // Final ground clearance verification at resolved camera position along ray
       const endX = this._shoulderPivot.x - this._forward.x * finalDist;
       const endY = this._shoulderPivot.y - this._forward.y * finalDist;
       const endZ = this._shoulderPivot.z - this._forward.z * finalDist;
       const minEndY = worldQuery.heightAt(endX, endZ) + 0.3;
 
       if (endY < minEndY) {
-        // Additional shortening pullback to satisfy >= 0.3m ground clearance
-        let low = 0.2;
+        // Additional continuous bisection along ray to satisfy >= 0.3m ground clearance without lifting Y
+        let low = 0.05;
         let high = finalDist;
-        for (let iter = 0; iter < 6; iter++) {
+        for (let iter = 0; iter < 10; iter++) {
           const mid = (low + high) * 0.5;
           const mx = this._shoulderPivot.x - this._forward.x * mid;
           const my = this._shoulderPivot.y - this._forward.y * mid;
@@ -318,21 +320,12 @@ export class ThirdPersonCamera {
             low = mid;
           }
         }
-        finalDist = Math.max(0.3, low);
+        finalDist = Math.max(0.05, low);
       }
     }
 
-    // Position camera at final resolved distance
+    // Position camera along ray at final resolved distance (guaranteed >= 0.3m above ground)
     this._actualPos.copy(this._shoulderPivot).addScaledVector(this._forward, -finalDist);
-
-    // Absolute terrain floor safeguard: camera is NEVER pushed under terrain
-    if (worldQuery && worldQuery.heightAt) {
-      const terrainFloor = worldQuery.heightAt(this._actualPos.x, this._actualPos.z) + 0.3;
-      if (this._actualPos.y < terrainFloor) {
-        this._actualPos.y = terrainFloor;
-      }
-    }
-
     this.camera.position.copy(this._actualPos);
 
     // Look target: in overhead mode, look directly at character pivot; in shoulder mode, look along forward vector
@@ -341,6 +334,7 @@ export class ThirdPersonCamera {
     } else {
       this._lookTarget.copy(this._shoulderPivot).addScaledVector(this._forward, 8.0);
     }
+    this.camera.up.copy(this._up);
     this.camera.lookAt(this._lookTarget);
   }
 

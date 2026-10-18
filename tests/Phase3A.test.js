@@ -430,3 +430,113 @@ test('PHASE 3A - Pause button toggles pause state and freezes gameplay while ren
   assert.strictEqual(hud.isPaused, false);
   assert.strictEqual(hud.pauseModal.style.display, 'none');
 });
+
+test('PHASE 3A - Camera up-vector stability and gimbal-lock prevention across [-40 deg, +80 deg]', () => {
+  const camera = new THREE.PerspectiveCamera(60, 16 / 9, 0.1, 400);
+  const tpCam = new ThirdPersonCamera(camera);
+
+  const testPitches = [-40, -25, -10, 0, 12, 45, 70, 80];
+  const dummyPlayerPos = new THREE.Vector3(0, 0, 0);
+  const dummyQuery = { heightAt: () => 0, queryColliders: () => [] };
+
+  for (const deg of testPitches) {
+    tpCam.pitch = deg * (Math.PI / 180);
+    tpCam.yaw = 0.75;
+    tpCam.update(1 / 60, dummyPlayerPos, false, false, dummyQuery);
+
+    assert.ok(!isNaN(camera.quaternion.x), `Quaternion must be valid at pitch ${deg} deg`);
+    assert.ok(!isNaN(camera.quaternion.y), `Quaternion must be valid at pitch ${deg} deg`);
+    assert.ok(!isNaN(camera.quaternion.z), `Quaternion must be valid at pitch ${deg} deg`);
+    assert.ok(!isNaN(camera.quaternion.w), `Quaternion must be valid at pitch ${deg} deg`);
+    assert.ok(camera.up.y > 0, `Camera up vector must point upward (+Y) at pitch ${deg} deg (got ${camera.up.y})`);
+    assert.ok(Math.abs(camera.up.length() - 1.0) < 1e-4, 'Camera up vector must be normalized');
+  }
+});
+
+test('PHASE 3A - Terrain ground rule preserves ray alignment without deflection snapping', () => {
+  const camera = new THREE.PerspectiveCamera(60, 16 / 9, 0.1, 400);
+  const tpCam = new ThirdPersonCamera(camera);
+
+  // Looking up (-30 deg) with a steep hill behind player
+  tpCam.pitch = -30 * (Math.PI / 180);
+  tpCam.yaw = 0;
+  tpCam.zoomByStance.crouch = 3.0;
+  tpCam.currentDist = 3.0;
+
+  const playerPos = new THREE.Vector3(0, 0, 0);
+  const steepHillQuery = {
+    heightAt: (x, z) => (z < -0.05 ? 1.35 : 0),
+    queryColliders: () => []
+  };
+
+  tpCam.update(1 / 60, playerPos, true, false, steepHillQuery);
+
+  // Camera must be strictly >= 0.3m above terrain at camera position
+  const camPos = tpCam.camera.position;
+  const groundAtCam = steepHillQuery.heightAt(camPos.x, camPos.z);
+  assert.ok(
+    camPos.y >= groundAtCam + 0.3 - 0.01,
+    `Camera Y (${camPos.y.toFixed(3)}) must stay >= 0.3m above terrain (${(groundAtCam + 0.3).toFixed(3)})`
+  );
+
+  // Camera must remain on the shoulderPivot -> camera ray (zero deflection / no arbitrary Y lift)
+  const toCam = camPos.clone().sub(tpCam._shoulderPivot).normalize();
+  const backForward = tpCam._forward.clone().negate();
+  const alignmentDot = toCam.dot(backForward);
+  assert.ok(
+    alignmentDot > 0.999,
+    `Camera must stay collinear with the ray along -forward (dot: ${alignmentDot.toFixed(4)})`
+  );
+});
+
+test('PHASE 3A - canStandUp prevents standing under rotated OBB overhead beams', () => {
+  const model = createPlayerModel(5555);
+  const controller = new PlayerController(model);
+  controller.spawn(0, 0, 0, 0);
+  controller.isCrouching = true;
+  controller.height = 1.1;
+
+  // Rotated 45-deg beam overhead at y=[1.4, 1.8]
+  const angle = Math.PI / 4;
+  const obbCol = {
+    min: [-2.0, 1.4, -2.0],
+    max: [2.0, 1.8, 2.0],
+    obb: {
+      cx: 0,
+      cz: 0,
+      hw: 0.8,
+      hd: 0.8,
+      cos: Math.cos(angle),
+      sin: Math.sin(angle)
+    }
+  };
+
+  const obbWorldQuery = {
+    heightAt: () => 0,
+    queryColliders: () => [obbCol]
+  };
+
+  assert.strictEqual(
+    controller.canStandUp(obbWorldQuery),
+    false,
+    'canStandUp must detect rotated OBB colliders overhead and return false'
+  );
+});
+
+test('PHASE 3A - GameHUD overhead button toggles text between OVERHEAD and SHOULDER', () => {
+  const hud = new GameHUD({});
+  // Default camera mode is shoulder
+  assert.strictEqual(hud.cameraMode, 'shoulder');
+  assert.strictEqual(hud.camToggleBtn.textContent, '🎥 OVERHEAD');
+
+  // Toggle into overhead
+  hud.toggleCameraMode();
+  assert.strictEqual(hud.cameraMode, 'overhead');
+  assert.strictEqual(hud.camToggleBtn.textContent, '🎥 SHOULDER');
+
+  // Toggle back to shoulder
+  hud.toggleCameraMode();
+  assert.strictEqual(hud.cameraMode, 'shoulder');
+  assert.strictEqual(hud.camToggleBtn.textContent, '🎥 OVERHEAD');
+});
+

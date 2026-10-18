@@ -112,13 +112,32 @@ export class PlayerController {
 
     for (let i = 0; i < colliders.length; i++) {
       const c = colliders[i];
-      // Overlap with character cylinder footprint
-      if (
-        px + r > c.min[0] && px - r < c.max[0] &&
-        pz + r > c.min[2] && pz - r < c.max[2] &&
-        py + 1.8 > c.min[1] && py + 1.05 < c.max[1]
-      ) {
-        return false; // Overhead collider blocks standing up
+      // Vertical overlap check
+      if (py + 1.8 <= c.min[1] || py + 1.05 >= c.max[1]) {
+        continue;
+      }
+
+      // If collider provides Oriented Bounding Box (OBB) representation
+      if (c.obb) {
+        const obb = c.obb;
+        const dx = px - obb.cx;
+        const dz = pz - obb.cz;
+        const lx = dx * obb.cos + dz * obb.sin;
+        const lz = -dx * obb.sin + dz * obb.cos;
+        const cx = Math.max(-obb.hw, Math.min(lx, obb.hw));
+        const cz = Math.max(-obb.hd, Math.min(lz, obb.hd));
+        const clx = lx - cx;
+        const clz = lz - cz;
+        if (clx * clx + clz * clz < r * r) {
+          return false;
+        }
+      } else {
+        if (
+          px + r > c.min[0] && px - r < c.max[0] &&
+          pz + r > c.min[2] && pz - r < c.max[2]
+        ) {
+          return false;
+        }
       }
     }
     return true;

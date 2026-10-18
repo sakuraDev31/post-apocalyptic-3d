@@ -43,13 +43,24 @@ export class Game {
     this.fpsTimer = performance.now();
     this.currentFps = 60;
 
-    this.brightness = 1.25;
+    let storedBrightness = 1.25;
+    try {
+      const saved = localStorage.getItem('game_brightness');
+      if (saved !== null) {
+        const parsed = parseFloat(saved);
+        if (!isNaN(parsed) && parsed >= 0.5 && parsed <= 2.5) {
+          storedBrightness = parsed;
+        }
+      }
+    } catch (e) {}
+
+    this.brightness = storedBrightness;
     this.initScene();
     this.initWorld();
     this.initPlayer();
     this.initUI();
     this.applyQuality(this.quality);
-    this.setBrightness(this.brightness);
+    this.setBrightness(this.gameHUD ? this.gameHUD.brightness : this.brightness);
 
     this.animate = this.animate.bind(this);
   }
@@ -114,9 +125,9 @@ export class Game {
     const spawnY = this.collisionWorld.heightAt(0, 0);
     this.playerController.spawn(0, spawnY, 0, 0);
 
-    // Default to overhead camera of the model
+    // Default to shoulder camera (FOV 60, dist 3.0m, pitch +12 deg, player fills ~50% screen)
     this.thirdPersonCamera = new ThirdPersonCamera(this.camera, {
-      mode: 'overhead',
+      mode: 'shoulder',
       initialYaw: 0,
       sensitivity: 0.12
     });

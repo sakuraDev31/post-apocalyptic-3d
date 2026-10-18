@@ -41,7 +41,7 @@ export class GameHUD {
     } catch (e) {}
 
     this.brightness = storedBrightness !== null ? storedBrightness : (options.brightness !== undefined ? options.brightness : 1.25);
-    this.cameraMode = options.cameraMode || 'overhead';
+    this.cameraMode = options.cameraMode || 'shoulder';
     this.invertJoystick = false;
 
     this.initDOM();
@@ -132,11 +132,11 @@ export class GameHUD {
     this.zoomGroup.appendChild(this.zoomOutBtn);
     this.topRight.appendChild(this.zoomGroup);
 
-    // Quick Camera Mode Toggle Button
+    // Quick Camera Mode Toggle Button (OVERHEAD button)
     this.camToggleBtn = document.createElement('button');
     this.camToggleBtn.type = 'button';
     this.camToggleBtn.className = 'hud-quick-btn hud-cam-btn';
-    this.camToggleBtn.textContent = this.cameraMode === 'overhead' ? '🎥 OVERHEAD' : '🎥 SHOULDER';
+    this.camToggleBtn.textContent = this.cameraMode === 'overhead' ? '🎥 SHOULDER' : '🎥 OVERHEAD';
     this.camToggleBtn.title = 'Toggle Camera View';
     this.camToggleBtn.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
@@ -616,7 +616,7 @@ export class GameHUD {
   toggleCameraMode() {
     this.cameraMode = (this.cameraMode === 'overhead' ? 'shoulder' : 'overhead');
     if (this.camToggleBtn) {
-      this.camToggleBtn.textContent = this.cameraMode === 'overhead' ? '🎥 OVERHEAD' : '🎥 SHOULDER';
+      this.camToggleBtn.textContent = this.cameraMode === 'overhead' ? '🎥 SHOULDER' : '🎥 OVERHEAD';
     }
     const camBtns = this.pauseModal.querySelectorAll('.cam-btn');
     camBtns.forEach((b) => {
@@ -629,7 +629,7 @@ export class GameHUD {
   setCameraMode(mode) {
     this.cameraMode = mode;
     if (this.camToggleBtn) {
-      this.camToggleBtn.textContent = this.cameraMode === 'overhead' ? '🎥 OVERHEAD' : '🎥 SHOULDER';
+      this.camToggleBtn.textContent = this.cameraMode === 'overhead' ? '🎥 SHOULDER' : '🎥 OVERHEAD';
     }
     const camBtns = this.pauseModal.querySelectorAll('.cam-btn');
     camBtns.forEach((b) => {
